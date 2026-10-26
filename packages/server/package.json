@@ -1,0 +1,22 @@
+{
+  "name": "@cloudagents/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/main.ts",
+    "start": "bun run src/main.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@effect/platform": "^0.97.3",
+    "@effect/platform-node": "^0.108.4",
+    "@modelcontextprotocol/sdk": "^1",
+    "effect": "^3.22.4",
+    "ws": "^8",
+    "zod": "^3.25"
+  },
+  "devDependencies": {
+    "@types/ws": "^8"
+  }
+}

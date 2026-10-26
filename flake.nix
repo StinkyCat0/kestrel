@@ -23,7 +23,7 @@
           # VCS: git worktrees are the unit of parallel agent work
           git
           # Remote desktop stack (one virtual X display per task)
-          xorg.xvfb     # virtual X server
+          xvfb         # virtual X server (xorg.xvfb is deprecated)
           openbox       # minimal window manager
           xterm         # default app on agent desktops
           xdotool       # input injection (mouse/keyboard) from the web client / MCP

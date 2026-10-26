@@ -12,8 +12,9 @@
     "build:web": "bun run --filter @cloudagents/web build"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
+    "@types/bun": "latest",
     "@types/node": "^22.10.0",
-    "@types/bun": "latest"
+    "typescript": "^5.9.3",
+    "wrangler": "^4"
   }
 }
