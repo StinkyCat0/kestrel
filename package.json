@@ -1,0 +1,19 @@
+{
+  "name": "cloudagents",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "bun run --filter '*' typecheck",
+    "dev:server": "bun run --filter @cloudagents/server dev",
+    "dev:web": "bun run --filter @cloudagents/web dev",
+    "build:web": "bun run --filter @cloudagents/web build"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "^22.10.0",
+    "@types/bun": "latest"
+  }
+}
