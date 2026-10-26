@@ -27,7 +27,7 @@
           openbox       # minimal window manager
           xterm         # default app on agent desktops
           xdotool       # input injection (mouse/keyboard) from the web client / MCP
-          ffmpeg        # x11grab capture -> H.264 -> fragmented MP4 stream
+          ffmpeg-full   # x11grab capture -> H.264 -> fragmented MP4 (nixpkgs ffmpeg lacks x11grab)
           # Cloudflare demo deploy
           cloudflared
         ];
