@@ -7,3 +7,4 @@ result
 *.log
 .env
 .env.local
+.cloudflare/

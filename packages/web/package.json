@@ -16,9 +16,11 @@
     "react-router-dom": "^7"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "beta",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5",
+    "cf": "^1.0.0-beta.23",
     "vite": "^7"
   }
 }
