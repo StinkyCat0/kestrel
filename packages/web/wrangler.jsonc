@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "cloudagents-web",
+  "name": "kestrel",
   "compatibility_date": "2026-01-01",
   "assets": {
     "directory": "./dist",
