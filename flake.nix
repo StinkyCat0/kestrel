@@ -44,6 +44,55 @@
           '';
         };
 
+        # `nix run`: server on http://127.0.0.1:8787 and web dev server on http://localhost:5173.
+        # `nix run .#tunnel`: server plus a cloudflared quick tunnel, for pointing a deployed web build at it.
+        apps =
+          let
+            preflight = ''
+              if [ ! -f flake.nix ] || [ ! -f package.json ]; then
+                echo "run from the cloudagents repo root" >&2
+                exit 1
+              fi
+              export CLOUDAGENTS_ROOT="$PWD"
+              export CLOUDAGENTS_DATA_DIR="''${CLOUDAGENTS_DATA_DIR:-$PWD/.data}"
+              if [ ! -d node_modules ]; then
+                bun install --frozen-lockfile
+              fi
+            '';
+            devRun = pkgs.writeShellApplication {
+              name = "cloudagents-dev";
+              runtimeInputs = systemDeps;
+              text = ''
+                ${preflight}
+                trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+                bun run --filter @cloudagents/server dev &
+                bun run --filter @cloudagents/web dev &
+                wait -n
+              '';
+            };
+            tunnelRun = pkgs.writeShellApplication {
+              name = "cloudagents-tunnel";
+              runtimeInputs = systemDeps;
+              text = ''
+                ${preflight}
+                trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+                bun run --filter @cloudagents/server dev &
+                echo "set VITE_CLOUDAGENTS_SERVER to the https URL printed below, then rebuild the web app" >&2
+                cloudflared tunnel --url http://127.0.0.1:8787
+              '';
+            };
+          in
+          {
+            default = {
+              type = "app";
+              program = "${devRun}/bin/cloudagents-dev";
+            };
+            tunnel = {
+              type = "app";
+              program = "${tunnelRun}/bin/cloudagents-tunnel";
+            };
+          };
+
         formatter = pkgs.nixpkgs-fmt;
       });
 }

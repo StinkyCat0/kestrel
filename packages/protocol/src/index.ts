@@ -213,3 +213,6 @@ export const Paths = {
   /** MCP (streamable HTTP) endpoint for the agent harness. */
   mcp: (taskId: string) => `/mcp/${taskId}`,
 } as const
+
+export * from "./relay"
+export * from "./control"
