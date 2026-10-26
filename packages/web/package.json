@@ -19,6 +19,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5",
-    "vite": "^7"
+    "vite": "^7",
+    "wrangler": "^4.153.0"
   }
 }
