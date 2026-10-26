@@ -131,6 +131,65 @@
                 exec bun run --filter @cloudagents/server dev
               '';
             };
+            # Production box that follows `main`: keeps its own clone (never your working checkout),
+            # polls origin every KESTREL_BOX_POLL seconds, and on a new commit fast-forwards,
+            # reinstalls deps and restarts the box. A restart interrupts in-flight agent runs.
+            boxAutoRun = pkgs.writeShellApplication {
+              name = "cloudagents-box-auto";
+              runtimeInputs = systemDeps ++ [ pkgs.util-linux ];
+              text = ''
+                dir="''${KESTREL_BOX_DIR:-$HOME/.local/share/kestrel-box}"
+                repo="''${KESTREL_BOX_REPO:-https://github.com/jarenm1/kestrel.git}"
+                interval="''${KESTREL_BOX_POLL:-60}"
+                if [ ! -d "$dir/.git" ]; then
+                  git clone --branch main "$repo" "$dir"
+                fi
+                if [ ! -f "$dir/.box.env" ]; then
+                  if [ -f .box.env ]; then
+                    install -m 600 .box.env "$dir/.box.env"
+                  else
+                    echo "missing $dir/.box.env (CLOUDAGENTS_CONTROL_URL, CLOUDAGENTS_BOX_TOKEN)" >&2
+                    exit 1
+                  fi
+                fi
+                cd "$dir"
+
+                child=""
+                stop() {
+                  if [ -n "$child" ] && kill -0 "$child" 2>/dev/null; then
+                    kill -TERM -- "-$child" 2>/dev/null || true
+                    wait "$child" 2>/dev/null || true
+                  fi
+                  child=""
+                }
+                start() {
+                  echo "box-auto: starting box at $(git rev-parse --short HEAD)" >&2
+                  bun install --frozen-lockfile >/dev/null
+                  # Own process group, so a restart stops bun and every agent under it.
+                  setsid nix run .#box &
+                  child=$!
+                }
+                trap 'stop; exit 0' INT TERM
+
+                start
+                while true; do
+                  sleep "$interval" &
+                  wait $! || true
+                  if ! kill -0 "$child" 2>/dev/null; then
+                    echo "box-auto: box exited; restarting" >&2
+                    start
+                    continue
+                  fi
+                  git fetch -q origin main || { echo "box-auto: fetch failed; will retry" >&2; continue; }
+                  if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+                    echo "box-auto: main moved to $(git rev-parse --short origin/main); updating" >&2
+                    stop
+                    git reset -q --hard origin/main
+                    start
+                  fi
+                done
+              '';
+            };
           in
           {
             default = {
@@ -140,6 +199,10 @@
             box = {
               type = "app";
               program = "${boxRun}/bin/cloudagents-box";
+            };
+            box-auto = {
+              type = "app";
+              program = "${boxAutoRun}/bin/cloudagents-box-auto";
             };
           };
 

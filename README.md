@@ -28,8 +28,8 @@ Checks: `nix develop -c bun run typecheck`.
 ## Deploys
 
 - **Web and control plane:** Workers Builds deploys `main` (build `bun run build:web`, then `wrangler deploy` in `packages/web`). To deploy by hand: `bunx cf builds create d87f7f0a-5dee-45c5-bb88-e5829c3a7792 --branch main`.
-- **Production box:** runs on the host machine with `nix run .#box`, which reads `CLOUDAGENTS_CONTROL_URL` and `CLOUDAGENTS_BOX_TOKEN` from `.box.env` (gitignored). It does not update itself: after server changes land on `main`, `git pull` on the host and restart it.
+- **Production box:** runs on the host machine with `nix run .#box-auto`. It keeps its own clone of `main` in `~/.local/share/kestrel-box` (override with `KESTREL_BOX_DIR`), polls GitHub every 60 s (`KESTREL_BOX_POLL`), and on a new commit fast-forwards and restarts the box, which interrupts in-flight agent runs. It reads `CLOUDAGENTS_CONTROL_URL` and `CLOUDAGENTS_BOX_TOKEN` from `.box.env` in that clone (copied from the current directory on first run). `nix run .#box` runs a box once from the current checkout.
 
 Don't run a box against production with the production token from your machine: the control plane keeps one box and a new connection replaces the live one.
 
-Pull requests get a Workers Builds preview deployment; the link appears in the PR checks.
+Pull requests get an isolated Preview at `https://<branch>-kestrel.jarenmchugh.workers.dev` (branch name with `/` replaced by `-`). It has its own empty Hub, no production secrets and no box, so it is for UI review.
