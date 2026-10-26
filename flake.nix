@@ -105,6 +105,7 @@
                 ${preflight}
                 if [ -f .box.env ]; then
                   set -a
+                  # shellcheck source=/dev/null
                   . ./.box.env
                   set +a
                 fi

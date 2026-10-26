@@ -149,6 +149,7 @@ const connectOnce = (
     ws.on("open", () => {
       opened = true
       send(encodeFrame({ t: "hello", version: RELAY_PROTOCOL_VERSION, boxVersion: VERSION }))
+      Effect.runSync(Effect.logInfo(`relay connected to ${url}`))
     })
     ws.on("message", (data, isBinary) => {
       lastSeen = Date.now()
