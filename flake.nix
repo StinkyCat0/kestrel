@@ -30,8 +30,8 @@
           xterm         # default app on agent desktops
           xdotool       # input injection (mouse/keyboard) from the web client / MCP
           ffmpeg-full   # x11grab capture -> H.264 -> fragmented MP4 (nixpkgs ffmpeg lacks x11grab)
-          # Cloudflare demo deploy
-          cloudflared
+          # Local control plane (`wrangler dev`); nixpkgs' build runs workerd on NixOS
+          wrangler
         ];
 
         # Toolchain visible inside the agent sandbox; PATH inside the sandbox is exactly this.
@@ -70,8 +70,10 @@
           '';
         };
 
-        # `nix run`: server on http://127.0.0.1:8787 and web dev server on http://localhost:5173.
-        # `nix run .#box`: server only, agent runs sandboxed. Sources ./.box.env (gitignored) for secrets.
+        # `nix run`: full local stack with no cloud dependency: Worker control plane via `wrangler dev`
+        #   (http://127.0.0.1:8788, dev sign-in), a box connected to it, and Vite on http://localhost:5173.
+        # `nix run .#box`: box only, sandboxed agents. Sources ./.box.env (gitignored) for the
+        #   production control-plane URL and box token.
         apps =
           let
             preflight = ''
@@ -92,9 +94,26 @@
               runtimeInputs = systemDeps;
               text = ''
                 ${preflight}
-                trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+                # Separate from a production box on the same machine.
+                export CLOUDAGENTS_DATA_DIR="''${CLOUDAGENTS_DEV_DATA_DIR:-$PWD/.data-dev}"
+                export CLOUDAGENTS_PORT="''${CLOUDAGENTS_PORT:-8787}"
+                vars=packages/web/.dev.vars
+                if [ ! -f "$vars" ]; then
+                  token=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+                  printf 'BOX_TOKEN=%s\nDEV_SESSION_LOGIN=dev\nALLOWED_GITHUB_LOGINS=dev\n' "$token" > "$vars"
+                  echo "created $vars (dev sign-in as 'dev')"
+                fi
+                CLOUDAGENTS_BOX_TOKEN=$(sed -n 's/^BOX_TOKEN=//p' "$vars")
+                export CLOUDAGENTS_BOX_TOKEN
+                export CLOUDAGENTS_CONTROL_URL=http://127.0.0.1:8788
+                if [ ! -d packages/web/dist ]; then
+                  bun run build:web
+                fi
+                trap 'kill 0' EXIT
+                (cd packages/web && wrangler dev --port 8788 --ip 127.0.0.1) &
                 bun run --filter @cloudagents/server dev &
                 bun run --filter @cloudagents/web dev &
+                echo "open http://localhost:5173/auth/dev-login to sign in" >&2
                 wait -n
               '';
             };
