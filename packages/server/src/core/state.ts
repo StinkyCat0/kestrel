@@ -7,8 +7,11 @@ import { Config } from "../config"
 export const newId = (): string => randomUUID()
 export const nowIso = (): string => new Date().toISOString()
 
+/** Projects saved before ownership existed have no `owner`; `loadFile` drops them. */
+const PersistedRepo = Schema.Struct({ ...Repo.fields, owner: Schema.optional(Schema.String) })
+
 const PersistedState = Schema.Struct({
-  repos: Schema.Array(Repo),
+  repos: Schema.Array(PersistedRepo),
   tasks: Schema.Array(Task),
   messages: Schema.Array(Message),
   runs: Schema.Array(Run),
@@ -58,7 +61,18 @@ const loadFile = (file: string): Effect.Effect<StoreState, InternalError> =>
     const decoded = yield* Schema.decodeUnknown(Schema.parseJson(PersistedState))(raw).pipe(
       Effect.mapError((e) => new InternalError({ message: `corrupt state file ${file}: ${e.message}` })),
     )
-    return { repos: [...decoded.repos], tasks: [...decoded.tasks], messages: [...decoded.messages], runs: [...decoded.runs] }
+    const repos: Repo[] = []
+    for (const r of decoded.repos) {
+      if (r.owner) repos.push({ ...r, owner: r.owner })
+      else yield* Effect.logWarning(`dropping project ${r.id} (${r.name}): it has no owner; its clone stays at ${r.localPath}`)
+    }
+    const taskIds = new Set(decoded.tasks.filter((t) => repos.some((r) => r.id === t.repoId)).map((t) => t.id))
+    return {
+      repos,
+      tasks: decoded.tasks.filter((t) => taskIds.has(t.id)),
+      messages: decoded.messages.filter((m) => taskIds.has(m.taskId)),
+      runs: decoded.runs.filter((r) => taskIds.has(r.taskId)),
+    }
   })
 
 /**
