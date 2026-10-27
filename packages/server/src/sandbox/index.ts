@@ -22,6 +22,12 @@ const SYSTEM_RO_FILES = [
   "/etc/ssl",
 ]
 
+/** A host dir bound read-write at a path inside the sandbox. */
+export interface SandboxBind {
+  readonly host: string
+  readonly sandbox: string
+}
+
 export interface BwrapOptions {
   readonly worktreePath: string
   /** Git common dir of the task's repo (worktrees need it for index/refs). Absolute. */
@@ -35,6 +41,8 @@ export interface BwrapOptions {
   readonly command: string
   /** Extra host paths mounted read-only at the same location (fake agent only). */
   readonly roBinds?: ReadonlyArray<string>
+  /** Host dirs bound read-write inside the sandbox (a signed-in user's CLI logins). */
+  readonly binds?: ReadonlyArray<SandboxBind>
 }
 
 /** Returns the full argv, starting with the `bwrap` executable name. */
@@ -68,6 +76,7 @@ export const buildBwrapArgv = (opts: BwrapOptions): string[] => {
     opts.gitCommonDir,
     opts.gitCommonDir,
   ]
+  for (const bind of opts.binds ?? []) argv.push("--bind", bind.host, bind.sandbox)
   // The agent commits through the shared git dir, but must not control what host-side git runs:
   // repo config (fsmonitor, filters, diff drivers, ...) and hooks stay read-only, other tasks'
   // worktree admin dirs are read-only, and this task's admin dir keeps its `commondir`/`gitdir`
@@ -94,6 +103,45 @@ export const buildBwrapArgv = (opts: BwrapOptions): string[] => {
   }
   for (const [name, value] of Object.entries(opts.env)) argv.push("--setenv", name, value)
   argv.push("--chdir", opts.worktreePath, "--", "sh", "-c", opts.command)
+  return argv
+}
+
+/**
+ * bwrap args (without the executable) that run `command` with only `homeDir` writable: for the agent CLIs' own
+ * sign-in/status/logout on the box. The process dies with the box (--die-with-parent) and sees nothing of the host
+ * beyond /nix/store and the DNS/TLS files.
+ */
+export const cliBwrapArgs = (
+  homeDir: string,
+  env: Readonly<Record<string, string>>,
+  command: ReadonlyArray<string>,
+): string[] => {
+  const argv = [
+    "--die-with-parent",
+    "--new-session",
+    "--unshare-all",
+    "--share-net",
+    "--clearenv",
+    "--ro-bind",
+    "/nix/store",
+    "/nix/store",
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    "--tmpfs",
+    "/tmp",
+    "--tmpfs",
+    "/home",
+    "--bind",
+    homeDir,
+    homeDir,
+  ]
+  for (const file of SYSTEM_RO_FILES) {
+    if (existsSync(file)) argv.push("--ro-bind", file, file)
+  }
+  for (const [name, value] of Object.entries(env)) argv.push("--setenv", name, value)
+  argv.push("--chdir", homeDir, "--", ...command)
   return argv
 }
 
@@ -136,6 +184,8 @@ export interface LaunchRequest {
   readonly env: Readonly<Record<string, string>>
   readonly command: string
   readonly roBinds?: ReadonlyArray<string>
+  /** Host dirs bound read-write inside the sandbox (a signed-in user's CLI logins). */
+  readonly binds?: ReadonlyArray<SandboxBind>
 }
 
 export interface Launch {
@@ -174,7 +224,7 @@ const killGroup = (pid: number | undefined, signal: NodeJS.Signals) => {
 
 export const killProcessGroup = killGroup
 
-const findExecutable = (name: string): string | null => {
+export const findExecutable = (name: string): string | null => {
   for (const dir of (process.env.PATH ?? "").split(":")) {
     if (dir === "") continue
     const candidate = join(dir, name)
@@ -244,6 +294,7 @@ export const prepareLaunch = (req: LaunchRequest): Effect.Effect<Launch, Interna
             env,
             command: req.command,
             roBinds: req.roBinds,
+            binds: req.binds,
           }).slice(1),
         }
       : { file: "sh", args: ["-c", req.command] }
