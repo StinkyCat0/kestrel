@@ -25,12 +25,22 @@ export interface WorkspaceShape {
   }) => Effect.Effect<void, WorkspaceError>
   readonly removeWorktree: (repoPath: string, worktreePath: string) => Effect.Effect<void, WorkspaceError>
   readonly deleteBranch: (repoPath: string, branch: string) => Effect.Effect<void, WorkspaceError>
-  /** Diff of the worktree against baseBranch, including uncommitted and untracked files. */
+  /** Diff of the worktree against baseRef (a commit or ref), including uncommitted and untracked files. */
   readonly diff: (opts: {
     readonly repoPath: string
     readonly worktreePath: string
-    readonly baseBranch: string
+    readonly baseRef: string
   }) => Effect.Effect<string, WorkspaceError>
+  /** Points `ref` at `target` (a branch, ref or commit), creating it when needed. Pins a task's fork point. */
+  readonly updateRef: (opts: {
+    readonly repoPath: string
+    readonly ref: string
+    readonly target: string
+  }) => Effect.Effect<void, WorkspaceError>
+  /** Deletes `ref`; succeeds when it is already gone. */
+  readonly deleteRef: (repoPath: string, ref: string) => Effect.Effect<void, WorkspaceError>
+  /** Whether `ref` resolves in the clone. */
+  readonly refExists: (repoPath: string, ref: string) => Effect.Effect<boolean, WorkspaceError>
   /**
    * Pushes `refs/heads/<branch>` from a task worktree to `remoteUrl`. Never forced; hooks and
    * agent-writable config (credential helpers, ssh command, askpass) are not honoured.
@@ -40,6 +50,16 @@ export interface WorkspaceShape {
     readonly worktreePath: string
     readonly remoteUrl: string
     readonly branch: string
+    readonly githubToken?: string
+  }) => Effect.Effect<void, WorkspaceError>
+  /**
+   * Fetches `refspec` from `remoteUrl` into the clone at `repoPath`. Never forced unless the refspec says so
+   * (`+`). `--update-head-ok` lets the clone's checked-out default branch advance; its working tree is unused.
+   */
+  readonly fetchRef: (opts: {
+    readonly repoPath: string
+    readonly remoteUrl: string
+    readonly refspec: string
     readonly githubToken?: string
   }) => Effect.Effect<void, WorkspaceError>
 }
@@ -109,8 +129,8 @@ const runProcess = (
  */
 const SAFE_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] as const
 
-/** Host-side push also overrides agent-writable config that could run host commands or helpers. */
-const PUSH_GIT = [...SAFE_GIT, "-c", "credential.helper=", "-c", "core.askPass=", "-c", "core.sshCommand=ssh"] as const
+/** Host-side remote operations (push, fetch) also override agent-writable config that could run host commands or helpers. */
+const REMOTE_GIT = [...SAFE_GIT, "-c", "credential.helper=", "-c", "core.askPass=", "-c", "core.sshCommand=ssh"] as const
 
 const PUSH_TIMEOUT_MS = 120_000
 
@@ -123,6 +143,19 @@ const pushFailureMessage = (branch: string, detail: string): string => {
     return `GitHub rejected the push of ${branch} (the connected token lacks write access or has expired): ${detail}`
   }
   return `git push ${branch} failed: ${detail}`
+}
+
+/** Git's own messages for the common fetch failures; a missing GitHub connection is the usual cause for private repos. */
+const fetchFailureMessage = (refspec: string, hasToken: boolean, detail: string): string => {
+  if (/non-fast-forward/.test(detail)) {
+    return `git fetch ${refspec} rejected: the local branch has commits origin does not have, and fetch never overwrites it: ${detail}`
+  }
+  if (/could not read Username|Authentication failed|terminal prompts disabled|Repository not found|\b40[13]\b/.test(detail)) {
+    return hasToken
+      ? `GitHub refused to fetch ${refspec} (the connected token lacks read access or has expired): ${detail}`
+      : `GitHub refused to fetch ${refspec}; private repositories need a GitHub connection with read access (connect GitHub under Connections, then retry): ${detail}`
+  }
+  return `git fetch ${refspec} failed: ${detail}`
 }
 
 const git = (
@@ -179,12 +212,18 @@ const redactSecret = (text: string, token: string | undefined): string => {
   return text.split(token).join("***").split(basic).join("***")
 }
 
+/**
+ * The ref that pins a task's fork point. It lives outside `refs/heads` so fetches that move a base branch,
+ * or a later task fetching the same pull request, never change the diff base of an existing task.
+ */
+export const taskBaseRef = (taskId: string): string => `refs/kestrel/base/${taskId}`
+
 const make: WorkspaceShape = {
   pushBranch: ({ repoPath, worktreePath, remoteUrl, branch, githubToken }) =>
     Effect.gen(function* () {
       const res = yield* runProcess(
         "git",
-        [...PUSH_GIT, "push", remoteUrl, `refs/heads/${branch}:refs/heads/${branch}`],
+        [...REMOTE_GIT, "push", remoteUrl, `refs/heads/${branch}:refs/heads/${branch}`],
         {
           cwd: worktreePath,
           env: { ...worktreeGitEnv(repoPath, worktreePath), ...githubAuthEnv(remoteUrl, githubToken) },
@@ -195,6 +234,21 @@ const make: WorkspaceShape = {
       if (res.exitCode !== 0) {
         const detail = redactSecret((res.stderr || res.stdout).trim(), githubToken)
         return yield* Effect.fail(new WorkspaceError({ message: pushFailureMessage(branch, detail) }))
+      }
+    }),
+  fetchRef: ({ repoPath, remoteUrl, refspec, githubToken }) =>
+    Effect.gen(function* () {
+      const res = yield* runProcess(
+        "git",
+        [...REMOTE_GIT, "fetch", "--no-tags", "--update-head-ok", remoteUrl, refspec],
+        { cwd: repoPath, env: githubAuthEnv(remoteUrl, githubToken), timeoutMs: PUSH_TIMEOUT_MS },
+        "git fetch",
+      )
+      if (res.exitCode !== 0) {
+        const detail = redactSecret((res.stderr || res.stdout).trim(), githubToken)
+        return yield* Effect.fail(
+          new WorkspaceError({ message: fetchFailureMessage(refspec, githubToken !== undefined && githubToken !== "", detail) }),
+        )
       }
     }),
   cloneRepo: (url, destDir, opts) =>
@@ -248,10 +302,17 @@ const make: WorkspaceShape = {
 
   deleteBranch: (repoPath, branch) => git(repoPath, ["branch", "-D", branch]).pipe(Effect.asVoid),
 
-  diff: ({ repoPath, worktreePath, baseBranch }) =>
+  updateRef: ({ repoPath, ref, target }) => git(repoPath, ["update-ref", ref, target]).pipe(Effect.asVoid),
+  deleteRef: (repoPath, ref) => git(repoPath, ["update-ref", "-d", ref]).pipe(Effect.asVoid),
+  refExists: (repoPath, ref) =>
+    runProcess("git", [...SAFE_GIT, "rev-parse", "--verify", "--quiet", ref], { cwd: repoPath }, "git rev-parse").pipe(
+      Effect.map((res) => res.exitCode === 0),
+    ),
+
+  diff: ({ repoPath, worktreePath, baseRef }) =>
     Effect.gen(function* () {
       const env = worktreeGitEnv(repoPath, worktreePath)
-      const tracked = yield* git(worktreePath, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", baseBranch], env)
+      const tracked = yield* git(worktreePath, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", baseRef], env)
       const untrackedList = yield* git(worktreePath, ["ls-files", "--others", "--exclude-standard", "-z"], env)
       let untracked = ""
       for (const file of untrackedList.split("\0")) {
