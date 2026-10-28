@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { keyInput, mouseButton, normalizePoint } from "@/desktop/input"
 import { VideoRenderer, type RenderStats } from "@/desktop/videoRenderer"
 import { errorText } from "@/util"
-import { StatusBadge } from "./StatusBadge"
+import { StatusIcon } from "./StatusIcon"
 
 const RECONNECT_MS = 2000
 
@@ -132,16 +132,16 @@ export function DesktopViewer({ taskId }: { taskId: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-2 border-b px-3 py-1.5">
+      <div className="flex items-center gap-2 px-4 pb-2">
         <Button
-          variant={active ? "outline" : "default"}
+          variant={active ? "soft" : "default"}
           size="sm"
           onClick={() => toggle.mutate()}
           disabled={toggle.isPending || !status}
         >
           {active ? "Stop" : "Start"}
         </Button>
-        {status && <StatusBadge status={status.state} />}
+        {status && <StatusIcon status={status.state} />}
         {status && status.state === "running" && (
           <span className="font-mono text-xs text-muted-foreground">
             {status.width}×{status.height} · {stats?.fps ?? 0} fps · {(stats?.decodeMs ?? 0).toFixed(1)} ms decode ·{" "}
@@ -149,8 +149,8 @@ export function DesktopViewer({ taskId }: { taskId: string }) {
           </span>
         )}
       </div>
-      {error && <Alert className="m-2 w-auto">{error}</Alert>}
-      <div className="relative min-h-0 flex-1 bg-black">
+      {error && <Alert className="mx-3 mb-2 w-auto">{error}</Alert>}
+      <div className="relative mx-3 mb-3 min-h-0 flex-1 overflow-hidden rounded-xl bg-black shadow-well">
         <canvas
           ref={canvasRef}
           className="absolute inset-0 size-full cursor-default object-contain outline-none focus:shadow-[inset_0_0_0_1px_var(--ring)]"
