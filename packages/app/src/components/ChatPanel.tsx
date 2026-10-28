@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import type { Message, Run } from "@cloudagents/protocol"
-import { api } from "@/api/client"
+import type { Message, Run, TaskStatus } from "@cloudagents/protocol"
+import { api, taskAttachmentUrl } from "@/api/client"
 import { keys, upsert } from "@/api/queries"
 import { Alert } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { RunPanel } from "./RunPanel"
 
 interface Props {
   taskId: string
+  taskStatus: TaskStatus | undefined
   messages: readonly Message[]
   runs: readonly Run[]
   output: Record<string, string[]>
@@ -23,13 +24,17 @@ const MESSAGE_CLASS_BY_ROLE: Record<string, string> = {
   system: "self-center bg-transparent italic text-muted-foreground",
 }
 
-export function ChatPanel({ taskId, messages, runs, output }: Props) {
+export function ChatPanel({ taskId, taskStatus, messages, runs, output }: Props) {
   const queryClient = useQueryClient()
   const [text, setText] = useState("")
   const threadRef = useRef<HTMLDivElement>(null)
 
   const sortedMessages = [...messages].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   const sortedRuns = [...runs].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+
+  // The latest question with options gets answer buttons, but only while the agent is blocked waiting for one.
+  const lastAsk = [...sortedMessages].reverse().find((m) => (m.options ?? []).length > 0)
+  const pendingAsk = taskStatus === "needs_input" ? lastAsk : undefined
 
   useEffect(() => {
     const el = threadRef.current
@@ -41,14 +46,13 @@ export function ChatPanel({ taskId, messages, runs, output }: Props) {
     onSuccess: (res) => {
       queryClient.setQueryData(keys.messages(taskId), (list: Message[] | undefined) => upsert(list, res.message))
       queryClient.setQueryData(keys.runs(taskId), (list: Run[] | undefined) => upsert(list, res.run))
-      setText("")
     },
   })
 
   function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const body = text.trim()
-    if (body) send.mutate(body)
+    if (body) send.mutate(body, { onSuccess: () => setText("") })
   }
 
   function onComposerKey(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -70,6 +74,18 @@ export function ChatPanel({ taskId, messages, runs, output }: Props) {
               {m.role} · {formatTime(m.createdAt)}
             </div>
             <div className="break-words whitespace-pre-wrap">{m.text}</div>
+            {(m.attachments ?? []).map((a) => (
+              <img key={a.id} src={taskAttachmentUrl(taskId, a.id)} alt="Attachment" className="mt-2 max-h-80 rounded border" />
+            ))}
+            {m.id === pendingAsk?.id && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(m.options ?? []).map((option, i) => (
+                  <Button key={i} variant="outline" size="sm" disabled={send.isPending} onClick={() => send.mutate(option)}>
+                    {option}
+                  </Button>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
