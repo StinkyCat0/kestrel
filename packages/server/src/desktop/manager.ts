@@ -74,6 +74,8 @@ export class DesktopManager extends Context.Tag("cloudagents/DesktopManager")<
     readonly processes: (taskId: string) => Effect.Effect<ReadonlyArray<DesktopApp>, DesktopError>
     /** Terminates an app (SIGTERM, then SIGKILL) and returns its final state. */
     readonly kill: (taskId: string, id: string) => Effect.Effect<DesktopApp, DesktopError>
+    /** The live encoder's cached GOP, keyframe first, for resyncing a viewer that fell behind; null when not cached. */
+    readonly cachedGop: (taskId: string) => Effect.Effect<ReadonlyArray<Uint8Array> | null, DesktopError>
     readonly subscribe: (taskId: string, sink: DesktopSink) => Effect.Effect<Effect.Effect<void>, DesktopError>
     readonly watchStatus: (listener: (s: DesktopStatus) => void) => Effect.Effect<Effect.Effect<void>>
     readonly stopAll: () => Effect.Effect<void>
@@ -92,10 +94,13 @@ const COMMAND_TIMEOUT_MS = 15_000
 /** Output kept per launched app; older text is dropped. */
 const OUTPUT_TAIL_CHARS = 32 * 1024
 /**
- * Frames per keyframe: 4 s at 60 fps. On a static desktop the IDR frames are nearly all of the bitrate
- * (NVENC: ~600 KB IDR vs ~0.1 KB P-frame at 1080p), so GOP 240 halves idle bandwidth against GOP 120.
+ * Keyframe clock: an IDR at least every KEYFRAME_INTERVAL_S of capture time. A static desktop encodes nothing, so the
+ * interval is what bounds how long a joiner waits for a keyframe and how large the cached GOP can get. On a static
+ * desktop the IDR is nearly all of the bitrate (NVENC: ~600 KB IDR vs ~0.1 KB P-frame at 1080p).
  * Late joiners don't wait for it: they get the cached GOP.
  */
+const KEYFRAME_INTERVAL_S = 4
+/** Frame-count backstop for the encoder's GOP; at 60 fps it equals KEYFRAME_INTERVAL_S, so the clock normally fires first. */
 const GOP = 240
 /** Cap on the cached current GOP replayed to late joiners. Past it, joiners wait for the next keyframe. */
 const GOP_CACHE_MAX_BYTES = 8 * 1024 * 1024
@@ -263,7 +268,7 @@ const xdotoolLines = (e: DesktopInput): string[] => {
 
 /**
  * Encoder arguments by kind. Both produce High-profile 4:2:0 H.264 with a GOP of GOP frames and no B-frames.
- * NVENC takes x11grab's bgr0 frames directly and converts to 4:2:0 on the GPU (adding `-pix_fmt yuv420p`
+ * NVENC takes the raw bgr0 frames directly and converts to 4:2:0 on the GPU (adding `-pix_fmt yuv420p`
  * moves that conversion to the CPU: ~50% of a core at 1080p60). `-delay 0 -zerolatency 1` stop NVENC from
  * holding output frames: screen change to fragment on stdout drops from 66 ms to 33 ms. p4/ll costs the same
  * CPU and latency as p1/ull at ~25-30% less bitrate on text and scrolling.
@@ -297,26 +302,30 @@ const ENCODER_ARGS: Record<EncoderKind, readonly string[]> = {
   ],
 }
 
-const ffmpegArgs = (display: string, kind: EncoderKind): string[] => [
+/** ffmpeg reads the raw bgr0 frames that xdamage-capture writes to its stdin (xdamage-capture runs ffmpeg as its child). */
+const ffmpegArgs = (kind: EncoderKind): string[] => [
   "-hide_banner",
   "-loglevel",
   "error",
-  // Grab frames as they are produced: no input buffering, no stream probing.
+  // Frames arrive when the screen changes: no input buffering, timestamps from the arrival clock.
   "-fflags",
   "nobuffer",
-  "-probesize",
-  "32",
   "-f",
-  "x11grab",
-  "-framerate",
-  String(FPS),
+  "rawvideo",
+  "-pix_fmt",
+  "bgr0",
   "-video_size",
   `${WIDTH}x${HEIGHT}`,
+  "-use_wallclock_as_timestamps",
+  "1",
   "-i",
-  display,
+  "pipe:0",
   ...ENCODER_ARGS[kind],
-  "-r",
-  String(FPS),
+  "-force_key_frames",
+  `expr:gte(t-prev_forced_t,${KEYFRAME_INTERVAL_S})`,
+  // Keep the capture clock: a static desktop leaves gaps in the timeline instead of duplicating frames.
+  "-fps_mode",
+  "passthrough",
   "-an",
   "-f",
   "flv",
@@ -554,7 +563,7 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
       s.gop = null
       s.gopBytes = 0
       s.awaiting = new Set(s.sinks)
-      enc.child = spawnTracked(s, "ffmpeg", ffmpegArgs(s.display, kind), {
+      enc.child = spawnTracked(s, "xdamage-capture", [String(WIDTH), String(HEIGHT), "ffmpeg", ...ffmpegArgs(kind)], {
         critical: false,
         onStdout: (d) => onEncoderBytes(s, enc, d),
         onStderr: (d) => {
@@ -903,6 +912,7 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
           return appView(app)
         }),
 
+      cachedGop: (taskId) => Effect.map(lookup(taskId), (s) => (s.gop === null ? null : [...s.gop])),
       subscribe: (taskId, sink) =>
         Effect.gen(function* () {
           const s = yield* lookup(taskId)
