@@ -1,5 +1,6 @@
 import { Effect, Either, Schema } from "effect"
 import {
+  Attachment,
   Automation,
   BoxStatus,
   CliAuthStatus,
@@ -54,6 +55,7 @@ function errorMessage(text: string, fallback: string): string {
   return text || fallback
 }
 
+/** `body`: a `Blob` (e.g. a `File`) is sent as raw bytes with its own type; anything else as JSON. */
 const request = <A, I>(
   schema: Schema.Schema<A, I>,
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
@@ -66,8 +68,11 @@ const request = <A, I>(
         fetch(SERVER_URL + path, {
           method,
           credentials: "include",
-          headers: body === undefined ? undefined : { "content-type": "application/json" },
-          body: body === undefined ? undefined : JSON.stringify(body),
+          ...(body === undefined
+            ? {}
+            : body instanceof Blob
+              ? { headers: { "content-type": body.type || "application/octet-stream" }, body }
+              : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
         }),
       catch: (e) => new ApiError(0, `Cannot reach server at ${SERVER_URL}: ${String(e)}`),
     })
@@ -101,6 +106,23 @@ const run = <A>(effect: Effect.Effect<A, ApiError>): Promise<A> =>
 export const taskAttachmentUrl = (taskId: string, attachmentId: string): string =>
   SERVER_URL + Paths.taskAttachment(taskId, attachmentId)
 
+/**
+ * Pending upload id of each `File` already stored on a task. A failed send leaves its uploads pending on the box (they
+ * are consumed only with the message), so a resend of the same `File` reuses the id instead of storing it again.
+ */
+const pendingUploads = new WeakMap<File, { readonly taskId: string; readonly id: string }>()
+
+/** Uploads `file` to the task unless it already waits there; the id is kept as soon as its own upload succeeds. */
+const uploadOnce = async (taskId: string, file: File): Promise<string> => {
+  const pending = pendingUploads.get(file)
+  if (pending?.taskId === taskId) return pending.id
+  const { id } = await run(
+    request(Attachment, "POST", `${Paths.taskUploads(taskId)}?name=${encodeURIComponent(file.name)}`, file),
+  )
+  pendingUploads.set(file, { taskId, id })
+  return id
+}
+
 export const api = {
   // Control plane (served by the Worker).
   me: () => run(request(Me, "GET", ControlPaths.me)),
@@ -129,8 +151,20 @@ export const api = {
   archiveTask: (taskId: string) => run(request(Task, "POST", Paths.taskArchive(taskId))),
   unarchiveTask: (taskId: string) => run(request(Task, "DELETE", Paths.taskArchive(taskId))),
   listMessages: (taskId: string) => run(request(Schema.Array(Message), "GET", Paths.taskMessages(taskId))),
-  sendMessage: (taskId: string, body: SendMessageBody) =>
-    run(request(SendMessageResponse, "POST", Paths.taskMessages(taskId), body)),
+  /**
+   * Uploads `files` to the task, then sends the message with them attached after any ids already in `body`.
+   * A resend after a failure uploads only the files that are not on the task yet.
+   */
+  sendMessage: async (taskId: string, body: SendMessageBody, files: readonly File[] = []) => {
+    const uploaded = await Promise.all(files.map((file) => uploadOnce(taskId, file)))
+    const attachments = [...(body.attachments ?? []), ...uploaded]
+    const sent = await run(
+      request(SendMessageResponse, "POST", Paths.taskMessages(taskId), attachments.length > 0 ? { ...body, attachments } : body),
+    )
+    // Sent ids are no longer pending; attaching the same `File` again must upload it anew.
+    for (const file of files) pendingUploads.delete(file)
+    return sent
+  },
   listRuns: (taskId: string) => run(request(Schema.Array(Run), "GET", Paths.taskRuns(taskId))),
   runItems: (runId: string) => run(request(RunItems, "GET", Paths.runItems(runId))),
   cancelRun: (runId: string) => run(request(Run, "POST", Paths.runCancel(runId))),
