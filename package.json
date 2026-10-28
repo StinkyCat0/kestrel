@@ -19,5 +19,8 @@
     "@types/node": "^22.10.0",
     "typescript": "^5.9.3",
     "wrangler": "^4"
+  },
+  "dependencies": {
+    "css-doodle": "^0.67.0"
   }
 }

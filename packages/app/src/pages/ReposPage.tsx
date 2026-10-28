@@ -7,7 +7,7 @@ import { BoxOfflineBanner, useBoxOffline } from "@/components/BoxStatus"
 import { GithubPicker } from "@/components/GithubPicker"
 import { Alert } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { AngledCard, AngledCardContent, AngledCardHeader, AngledCardTitle, AngledCardDescription } from "@/components/ui/angled-card"
 import { Input } from "@/components/ui/input"
 import { errorText } from "@/util"
 
@@ -34,74 +34,75 @@ export function ReposPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 overflow-auto p-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Repositories</h1>
-        <p className="text-muted-foreground">Repos cloned onto your agent box.</p>
-      </div>
-      <BoxOfflineBanner />
-      {addRepo.error && <Alert>{errorText(addRepo.error)}</Alert>}
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 overflow-auto p-8">
+    <div>
+    <h1 className="text-2xl font-bold tracking-tight text-white">Repositories</h1>
+    <p className="text-muted-foreground mt-1">Repos cloned onto your agent box.</p>
+    </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Your repositories</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {repos.isPending && <div className="text-muted-foreground">Loading…</div>}
-          {repos.error && <Alert>{errorText(repos.error)}</Alert>}
-          {repos.data?.length === 0 && <div className="text-muted-foreground">No repositories yet.</div>}
-          <ul className="divide-y">
-            {repos.data?.map((repo) => (
-              <li key={repo.id} className="flex items-baseline gap-3 py-2">
-                <Link to={`/repos/${repo.id}`} className="font-medium text-primary hover:underline">
-                  {repo.name}
-                </Link>
-                <span className="truncate font-mono text-xs text-muted-foreground">{repo.url}</span>
-              </li>
-            ))}
-          </ul>
-        </CardContent>
-      </Card>
+    <BoxOfflineBanner />
+    {addRepo.error && <Alert className="border-destructive/50 bg-destructive/10 text-destructive">{errorText(addRepo.error)}</Alert>}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Add from GitHub</CardTitle>
-          <CardDescription>Your 100 most recently updated repositories.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <GithubPicker
-            disabled={busy || offline}
-            onPick={(repo) => addRepo.mutate({ url: repo.cloneUrl, name: repo.fullName })}
-          />
-        </CardContent>
-      </Card>
+    <AngledCard>
+    <AngledCardHeader>
+    <AngledCardTitle>Your repositories</AngledCardTitle>
+    </AngledCardHeader>
+    <AngledCardContent>
+    {repos.isPending && <div className="text-muted-foreground">Loading…</div>}
+    {repos.error && <Alert>{errorText(repos.error)}</Alert>}
+    {repos.data?.length === 0 && <div className="text-muted-foreground">No repositories yet.</div>}
+    <ul className="divide-y divide-white/5">
+    {repos.data?.map((repo) => (
+      <li key={repo.id} className="flex items-baseline gap-3 py-3">
+      <Link to={`/repos/${repo.id}`} className="font-medium text-primary hover:underline hover:text-primary/80 transition-colors">
+      {repo.name}
+      </Link>
+      <span className="truncate font-mono text-xs text-muted-foreground">{repo.url}</span>
+      </li>
+    ))}
+    </ul>
+    </AngledCardContent>
+    </AngledCard>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Add by URL</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form className="flex flex-wrap gap-2" onSubmit={addByUrl}>
-            <Input
-              className="min-w-48 flex-1"
-              type="url"
-              required
-              placeholder="Git clone URL"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-            />
-            <Input
-              className="min-w-48 flex-1"
-              placeholder="Name (optional)"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <Button type="submit" disabled={busy || offline || url.trim() === ""}>
-              {busy ? "Cloning…" : "Add repo"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+    <AngledCard>
+    <AngledCardHeader>
+    <AngledCardTitle>Add from GitHub</AngledCardTitle>
+    <AngledCardDescription>Your 100 most recently updated repositories.</AngledCardDescription>
+    </AngledCardHeader>
+    <AngledCardContent>
+    <GithubPicker
+    disabled={busy || offline}
+    onPick={(repo) => addRepo.mutate({ url: repo.cloneUrl, name: repo.fullName })}
+    />
+    </AngledCardContent>
+    </AngledCard>
+
+    <AngledCard>
+    <AngledCardHeader>
+    <AngledCardTitle>Add by URL</AngledCardTitle>
+    </AngledCardHeader>
+    <AngledCardContent>
+    <form className="flex flex-wrap gap-3" onSubmit={addByUrl}>
+    <Input
+    className="min-w-48 flex-1 bg-white/5 border-white/10 focus:border-white/30 focus:bg-white/10 transition-colors"
+    type="url"
+    required
+    placeholder="Git clone URL"
+    value={url}
+    onChange={(e) => setUrl(e.target.value)}
+    />
+    <Input
+    className="min-w-48 flex-1 bg-white/5 border-white/10 focus:border-white/30 focus:bg-white/10 transition-colors"
+    placeholder="Name (optional)"
+    value={name}
+    onChange={(e) => setName(e.target.value)}
+    />
+    <Button type="submit" disabled={busy || offline || url.trim() === ""} className="bg-white text-black hover:bg-zinc-200">
+    {busy ? "Cloning…" : "Add repo"}
+    </Button>
+    </form>
+    </AngledCardContent>
+    </AngledCard>
     </div>
   )
 }
