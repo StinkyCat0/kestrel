@@ -21,7 +21,9 @@ import {
   CreateTaskBody,
   DesktopStatus,
   DiffResponse,
+  type FileRoot,
   FilesResponse,
+  MAX_RELAY_RESPONSE_BYTES,
   GithubRepo,
   Health,
   HarnessCommands,
@@ -534,7 +536,31 @@ export const api = {
   runItems: (taskId: string, runId: string) => onTask(taskId, RunItems, "GET", Paths.runItems(runId)),
   cancelRun: (taskId: string, runId: string) => onTask(taskId, Run, "POST", Paths.runCancel(runId)),
   getDiff: (taskId: string) => onTask(taskId, DiffResponse, "GET", Paths.taskDiff(taskId)),
-  getFiles: (taskId: string) => onTask(taskId, FilesResponse, "GET", Paths.taskFiles(taskId)),
+  getFiles: (taskId: string, hidden: boolean) =>
+    onTask(taskId, FilesResponse, "GET", Paths.taskFiles(taskId) + (hidden ? "?hidden=1" : "")),
+  /**
+   * Starts the browser's download of one of a thread's files. A HEAD request first finds out whether it would work:
+   * handed straight to the browser, a failure would be saved as a file, or (cross-origin, on a user's own box) open as
+   * a page in place of the app. Through Kestrel's relayed box a file over `MAX_RELAY_RESPONSE_BYTES` cannot be sent;
+   * the relay answers that HEAD with 413 from the declared length alone.
+   */
+  downloadFile: async (taskId: string, root: FileRoot, path: string): Promise<void> => {
+    const url = await taskFileUrl(taskId, Paths.taskFileDownload(taskId, root, path))
+    const name = path.slice(path.lastIndexOf("/") + 1)
+    const check = await fetch(url, { method: "HEAD" })
+    if (check.status === 413) {
+      throw new Error(
+        `${name} is over ${MAX_RELAY_RESPONSE_BYTES / 1024 / 1024} MB, the most Kestrel's shared box can send. Use your own or a managed box for larger files.`,
+      )
+    }
+    if (check.status === 404) throw new Error(`${name} is no longer there; refresh the list.`)
+    if (!check.ok) throw new Error(`Could not download ${name} (HTTP ${check.status}).`)
+    // The response is an attachment, so following the link saves the file and leaves the page as it is.
+    const link = document.createElement("a")
+    link.href = url
+    link.download = ""
+    link.click()
+  },
   getDesktop: (taskId: string) => onTask(taskId, DesktopStatus, "GET", Paths.taskDesktop(taskId)),
   startDesktop: (taskId: string) => onTask(taskId, DesktopStatus, "POST", Paths.taskDesktop(taskId)),
   stopDesktop: async (taskId: string): Promise<void> => {
