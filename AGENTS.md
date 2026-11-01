@@ -46,6 +46,9 @@ git pull --ff-only origin main
 
 `git worktree list` shows what is still around; clean up every merged one.
 
+**Windows:** when `git worktree remove` fails with `Directory not empty`, finish with
+`cmd /c rmdir /s /q ..\kestrel-worktrees\<topic>`.
+
 - Branch names: `<github-login>/<topic>`, e.g. `caayd/install-link`.
 - Every PR gets a Preview: `https://<branch with / replaced by ->-kestrel.jarenmchugh.workers.dev` (app and public
   pages; its own empty Hub, no secrets, no box, so UI review only).
