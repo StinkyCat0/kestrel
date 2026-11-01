@@ -71,6 +71,13 @@ export interface WorkspaceShape {
   readonly headSha: (spec: CheckoutSpec) => Effect.Effect<string, WorkspaceError>
   /** Everything on the checkout against `baseRef` (a ref in the shadow): commits, staged, unstaged and untracked files. */
   readonly diff: (spec: CheckoutSpec & { readonly baseRef: string }) => Effect.Effect<string, WorkspaceError>
+  /**
+   * Paths of the checkout's files on disk, sorted: everything its `.gitignore` files do not ignore, plus files committed
+   * at HEAD even when ignored. At most `limit`; `truncated` says there were more.
+   */
+  readonly listFiles: (
+    spec: CheckoutSpec & { readonly limit: number },
+  ) => Effect.Effect<{ readonly files: ReadonlyArray<string>; readonly truncated: boolean }, WorkspaceError>
   /** Pushes `head` to `refs/heads/<branch>` on `url`. Never forced. */
   readonly pushBranch: (
     spec: CheckoutSpec & { readonly url: string; readonly branch: string; readonly head: string; readonly githubToken?: string },
@@ -255,6 +262,40 @@ const readRefSha = (gitDir: string, ref: string): Effect.Effect<string, Workspac
       }
     },
     catch: (e) => new WorkspaceError({ message: `cannot read ${ref}: ${String(e)}` }),
+  })
+
+/**
+ * The commit a verified checkout's HEAD points at, read from its files (never through git). Null while HEAD names a
+ * branch with no commit yet (an empty repository, `git checkout --orphan`).
+ */
+const readHeadSha = (real: string): Effect.Effect<string | null, WorkspaceError> =>
+  Effect.gen(function* () {
+    const gitDir = join(real, ".git")
+    const head = yield* Effect.tryPromise({
+      try: () => readFile(join(gitDir, "HEAD"), "utf8"),
+      catch: (e) => new WorkspaceError({ message: `cannot read HEAD: ${String(e)}` }),
+    })
+    const trimmed = head.trim()
+    const sha = trimmed.startsWith("ref: ") ? yield* readRefSha(gitDir, trimmed.slice(5).trim()) : trimmed
+    if (sha === "") return null
+    if (!SHA.test(sha)) return yield* Effect.fail(new WorkspaceError({ message: "HEAD does not name a commit" }))
+    return sha
+  })
+
+/**
+ * Whether `path` (relative, `/`-separated) exists in the checkout `real`, with its directory really inside it: the
+ * agent can swap a directory for a symlink, and the listing must not report on files outside the checkout.
+ */
+const existsInside = (real: string, path: string): Effect.Effect<boolean> =>
+  Effect.promise(async () => {
+    try {
+      const dir = await realpath(join(real, posix.dirname(path)))
+      if (dir !== real && !dir.startsWith(real + sep)) return false
+      await lstat(join(dir, posix.basename(path)))
+      return true
+    } catch {
+      return false
+    }
   })
 
 /** Creates the bare mirror at `mirrorPath` when it does not exist yet. Mirrors never hold checkout data. */
@@ -513,15 +554,8 @@ const make: WorkspaceShape = {
 
   headSha: (spec) =>
     Effect.gen(function* () {
-      const real = yield* verifyCheckout(spec)
-      const gitDir = join(real, ".git")
-      const head = yield* Effect.tryPromise({
-        try: () => readFile(join(gitDir, "HEAD"), "utf8"),
-        catch: (e) => new WorkspaceError({ message: `cannot read HEAD: ${String(e)}` }),
-      })
-      const trimmed = head.trim()
-      const sha = trimmed.startsWith("ref: ") ? yield* readRefSha(gitDir, trimmed.slice(5).trim()) : trimmed
-      if (!SHA.test(sha)) return yield* Effect.fail(new WorkspaceError({ message: "the checkout has no commit yet" }))
+      const sha = yield* readHeadSha(yield* verifyCheckout(spec))
+      if (sha === null) return yield* Effect.fail(new WorkspaceError({ message: "the checkout has no commit yet" }))
       return sha
     }),
 
@@ -536,6 +570,31 @@ const make: WorkspaceShape = {
       } finally {
         yield* Effect.promise(() => rm(index, { force: true }))
       }
+    }),
+
+  listFiles: (spec) =>
+    Effect.gen(function* () {
+      const real = yield* verifyCheckout(spec)
+      // Against an index that does not exist every file is "other", so this lists the whole working tree minus what
+      // is ignored, without hashing anything or reading the checkout's own index.
+      const env = { GIT_INDEX_FILE: join(spec.shadowPath, `index-${randomUUID()}.absent`) }
+      const others = yield* shadowGit(spec.shadowPath, real, ["ls-files", "-z", "--others", "--exclude-standard"], env)
+      // A nested repository is listed as `dir/` (git does not descend into it); the browser shows files only.
+      const files = new Set(others.split("\0").filter((p) => p !== "" && !p.endsWith("/")))
+      // Files committed despite an ignore rule (force-added, `.env.example` under `.env*`) are tracked, so they show
+      // too: the blobs of the checkout's HEAD commit (its objects reach the shadow through alternates) still on disk.
+      // A branch with no commit yet has none.
+      const head = yield* readHeadSha(real)
+      const tree = head === null ? "" : yield* shadowGit(spec.shadowPath, real, ["ls-tree", "-r", "-z", "--full-tree", head])
+      for (const entry of tree.split("\0")) {
+        const tab = entry.indexOf("\t")
+        // `<mode> <type> <object>\t<path>`; submodules are `commit` entries, not files.
+        if (tab === -1 || entry.split(" ")[1] !== "blob") continue
+        const path = entry.slice(tab + 1)
+        if (!files.has(path) && (yield* existsInside(real, path))) files.add(path)
+      }
+      const all = [...files].sort()
+      return { files: all.slice(0, spec.limit), truncated: all.length > spec.limit }
     }),
 
   pushBranch: ({ shadowPath, dir, threadDir, url, branch, head, githubToken }) =>
