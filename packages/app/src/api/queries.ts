@@ -23,6 +23,8 @@ export const keys = {
   boxHealth: (url: string) => ["box-health", url] as const,
   /** Status of the box the apps talk to. */
   box: ["box"] as const,
+  /** Status of Kestrel's box, read whichever box is active (the new-thread box picker). */
+  kestrelBox: ["kestrel-box"] as const,
   /** Kestrel's managed boxes, as operators see them (`Me.operator`). */
   fleetBoxes: ["fleet-boxes"] as const,
   /** A pairing code's pending approval, read by the approval page. */
@@ -30,6 +32,8 @@ export const keys = {
   connections: ["connections"] as const,
   usage: ["usage"] as const,
   automations: ["automations"] as const,
+  githubRepos: ["github-repos"] as const,
+  githubBranches: (repo: string) => ["github-branches", repo] as const,
   /** CLI sign-ins on the box the apps talk to. */
   cliAuth: ["cli-auth"] as const,
   /** All of the user's threads. Named apart from `task(id)` so invalidating one never touches the other. */
@@ -123,9 +127,14 @@ export const queries = {
   boxHealth: (url: string) =>
     queryOptions({ queryKey: keys.boxHealth(url), queryFn: () => api.checkBox(url), refetchInterval: BOX_POLL_MS }),
   box: () => queryOptions({ queryKey: keys.box, queryFn: api.boxStatus, refetchInterval: BOX_POLL_MS }),
+  kestrelBox: () =>
+    queryOptions({ queryKey: keys.kestrelBox, queryFn: api.kestrelBoxStatus, refetchInterval: BOX_POLL_MS }),
   connections: () => queryOptions({ queryKey: keys.connections, queryFn: api.connections }),
   usage: () => queryOptions({ queryKey: keys.usage, queryFn: api.usage }),
   automations: () => queryOptions({ queryKey: keys.automations, queryFn: api.listAutomations }),
+  githubRepos: () => queryOptions({ queryKey: keys.githubRepos, queryFn: api.githubRepos }),
+  githubBranches: (repo: string) =>
+    queryOptions({ queryKey: keys.githubBranches(repo), queryFn: () => api.githubBranches(repo) }),
   cliAuth: () => queryOptions({ queryKey: keys.cliAuth, queryFn: api.cliAuth }),
   tasks: () => queryOptions({ queryKey: keys.tasks, queryFn: api.listTasks }),
   task: (taskId: string) => queryOptions({ queryKey: keys.task(taskId), queryFn: () => api.getTask(taskId) }),

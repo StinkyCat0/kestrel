@@ -21,6 +21,7 @@ import {
   CreateTaskBody,
   DesktopStatus,
   DiffResponse,
+  GithubRepo,
   Health,
   HarnessCommands,
   FleetBox,
@@ -348,6 +349,11 @@ async function checkBox(url: string): Promise<BoxStatus> {
   }
 }
 
+/** A box's status: the relayed status for Kestrel's relayed box, else the box's own health. */
+function statusOf(target: Target): Promise<BoxStatus> {
+  return target === null ? run(request(BoxStatus, "GET", ControlPaths.box)) : checkBox(target.url)
+}
+
 /**
  * Absolute URL of a WebSocket path on `target`: through the Worker, or straight to a user box with its token in the
  * query.
@@ -416,6 +422,10 @@ export const api = {
   deleteConnection: (provider: string) =>
     run(Effect.asVoid(request(Schema.Unknown, "DELETE", ControlPaths.connection(provider)))),
   listAutomations: () => run(request(Schema.Array(Automation), "GET", ControlPaths.automations)),
+  /** Repositories the user's GitHub connection can read, most recently updated first. 404 when GitHub is not connected. */
+  githubRepos: () => run(request(Schema.Array(GithubRepo), "GET", ControlPaths.githubRepos)),
+  /** Branch names of a repository ("owner/name") the GitHub connection can read, the default branch first. */
+  githubBranches: (repo: string) => run(request(Schema.Array(Schema.String), "GET", ControlPaths.githubBranches(repo))),
   updateAutomation: (id: string, body: UpdateAutomationBody) =>
     run(request(Automation, "PATCH", ControlPaths.automation(id), body)),
   deleteAutomation: (id: string) =>
@@ -459,11 +469,10 @@ export const api = {
   rotateFleetBoxSecret: (id: string) => run(request(CreatedFleetBox, "POST", ControlPaths.fleetBoxSecret(id))),
   checkBox,
   forgetBox,
-/** Status of the box the apps talk to: Kestrel's box (its managed box's own health, or the relayed status), or the active user box's own health. */
-  boxStatus: async (): Promise<BoxStatus> => {
-    const target = await activeTarget()
-    return target === null ? run(request(BoxStatus, "GET", ControlPaths.box)) : checkBox(target.url)
-  },
+  /** Status of the box the apps talk to: Kestrel's box (its managed box's own health, or the relayed status), or the active user box's own health. */
+  boxStatus: async (): Promise<BoxStatus> => statusOf(await activeTarget()),
+  /** Status of Kestrel's box, whichever box is active. */
+  kestrelBoxStatus: (): Promise<BoxStatus> => statusOf(kestrelTarget()),
 
   // Agent box: box-level state comes from the active box; everything about a thread comes from the thread's own box.
   cliAuth: () => onActive(Schema.Array(CliAuthStatus), "GET", ControlPaths.cliAuth),
@@ -487,8 +496,10 @@ export const api = {
   usage: () => onActive(Usage, "GET", Paths.usage),
   /** Every box's threads, merged; a box that does not answer is left out unless none does. */
   listTasks: listAllTasks,
-  createTask: async (body: CreateTaskBody): Promise<Task> => {
-    const target = await activeTarget()
+  /** Creates a thread on `boxId` (`null`: Kestrel's box), or on the active box when omitted. */
+  createTask: async (body: CreateTaskBody, boxId?: string | null): Promise<Task> => {
+    const target = boxId === undefined ? await activeTarget() : routeOf(boxId)
+    if (target === undefined) throw new ApiError(404, "That box is no longer in your box list")
     const task = await run(boxCall(target, Task, "POST", Paths.tasks, body))
     taskBoxes.set(task.id, target?.boxId ?? null)
     return task
