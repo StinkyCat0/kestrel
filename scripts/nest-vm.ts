@@ -328,6 +328,8 @@ const labels = (options: VmOptions) => ({
   "app.kubernetes.io/managed-by": "kestrel-nest",
   "kestrel.io/box": options.name,
   "kestrel.io/owner": options.owner,
+  // KubeVirt copies template labels onto the virt-launcher pod; the box Service selects this label.
+  "kubevirt.io/domain": options.name,
 })
 
 const dataVolume = (options: VmOptions, name: string, source: Record<string, unknown>, size: string) => ({
@@ -401,7 +403,13 @@ export const render = (options: VmOptions): Manifest => {
                 { name: "cloudinit", disk: { bus: "virtio" } },
                 { name: "data", disk: { bus: "virtio" } },
               ],
-              interfaces: [{ name: "default", masquerade: {} }],
+              interfaces: [
+                {
+                  name: "default",
+                  masquerade: {},
+                  ports: [{ name: "http", port: options.port, protocol: "TCP" }],
+                },
+              ],
               ...(options.gpuDevice === null
                 ? {}
                 : { gpus: [{ name: "gpu-0", deviceName: options.gpuDevice }] }),

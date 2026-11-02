@@ -13,7 +13,7 @@ import {
   type ModelProviderInfo,
 } from "@cloudagents/protocol"
 import { Schema } from "effect"
-import { ChevronDown } from "lucide-react"
+import { Check, ChevronDown } from "lucide-react"
 import { api } from "@/api/client"
 import { keys, queries } from "@/api/queries"
 import { Alert } from "@/components/ui/alert"
@@ -32,7 +32,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { SERVER_URL } from "@/config"
 import { useActiveBoxId } from "@/hooks/useActiveBox"
+import { HARNESSES, HARNESS_LABELS, harnessOfProvider, useHarness } from "@/hooks/useHarness"
 import { setShownModels, useShownModels } from "@/hooks/useShownModels"
+import { cn } from "@/lib/utils"
 import { errorText } from "@/util"
 
 /** API keys shorter than this are rejected by the server (`PutApiKeyBody`). */
@@ -40,6 +42,56 @@ const MIN_API_KEY_LENGTH = 8
 
 /** While a codex sign-in is pending, connections are re-read at this interval until the box reports the login. */
 const CLI_POLL_MS = 3000
+
+/** The CLI new chats run on. This is deliberately separate from the per-message model picker. */
+function HarnessCard() {
+  const [harness, setHarness] = useHarness()
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <h2 className="font-semibold tracking-tight">Harness</h2>
+        <p className="text-muted-foreground">
+          The agent CLI new chats run on. The model picker in a chat only switches models within this harness.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {HARNESSES.map((choice) => {
+          const provider = MODEL_PROVIDERS.find((p) => harnessOfProvider(p) === choice)
+          const active = choice === harness
+          return (
+            <button
+              key={choice}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setHarness(choice)}
+              className={cn(
+                "flex flex-col gap-1.5 rounded-xl border p-4 text-left transition-colors",
+                active
+                  ? "border-white/25 bg-white/[0.06]"
+                  : "border-white/[0.06] bg-card/40 hover:border-white/15 hover:bg-card/70",
+              )}
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold">
+                {HARNESS_LABELS[choice]}
+                {active && <Check className="ml-auto size-4 text-foreground/80" />}
+              </span>
+              <span className="text-xs leading-relaxed text-muted-foreground">
+                {provider?.standalone
+                  ? provider.setup === undefined
+                    ? "Uses the CLI login configured on the box."
+                    : `Uses the CLI login on the box; run ${provider.setup}.`
+                  : choice === "claude"
+                    ? "Uses your connected Anthropic or Claude-compatible key."
+                    : "Uses your connected OpenAI key."}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 /** Body of Settings › Connections: the accounts and keys, then the models each provider shows in the chat picker. */
 export function Connections() {
@@ -52,6 +104,7 @@ export function Connections() {
 
   return (
     <>
+      <HarnessCard />
       {connections.error && <Alert>{errorText(connections.error)}</Alert>}
       {cliAuth.error && <Alert>{errorText(cliAuth.error)}</Alert>}
       {connections.isPending && <div className="text-muted-foreground">Loading…</div>}

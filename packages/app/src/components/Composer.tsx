@@ -52,6 +52,7 @@ import {
   type GithubReferenceKind,
 } from "@/lib/githubReference"
 import { useShownModels } from "@/hooks/useShownModels"
+import { harnessOfProvider, useHarness } from "@/hooks/useHarness"
 import { useStoredChoice } from "@/hooks/useStoredChoice"
 import { useStoredDraft } from "@/hooks/useStoredDraft"
 import { cn } from "@/lib/utils"
@@ -131,7 +132,7 @@ function ModelPicker({
         className="max-h-(--radix-dropdown-menu-content-available-height) min-w-56 overflow-y-auto"
       >
         {sections !== null && sections.length === 0 && (
-          <DropdownMenuLabel>Connect Anthropic or OpenAI to choose a model.</DropdownMenuLabel>
+          <DropdownMenuLabel>Choose a harness and connect a provider in Settings › Connections.</DropdownMenuLabel>
         )}
         <DropdownMenuRadioGroup
           value={value?.id ?? ""}
@@ -392,6 +393,7 @@ export function Composer({
   const [storedEffort, setEffort] = useStoredChoice("kestrel.effort", AgentEffort)
   const connections = useQuery(queries.connections())
   const shown = useShownModels()
+  const [harness] = useHarness()
   // The reference repository picker's choice. A page-level pick (the new thread's repository) wins when set.
   const [pickedReferenceRepo, setPickedReferenceRepo] = useState<string>()
   const checkoutRepos = repos.filter((candidate) => Schema.is(GithubRepoSlug)(candidate))
@@ -400,6 +402,7 @@ export function Composer({
   useEffect(() => setPickedReferenceRepo(undefined), [repo])
   const sections: readonly ModelSection[] | null = connections.data
     ? connectedModelProviders(connections.data)
+        .filter((provider) => harnessOfProvider(provider) === harness)
         .map((provider) => ({ provider, models: shown[provider.id] }))
         .filter((s) => s.models.length > 0)
     : null
