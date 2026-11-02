@@ -54,8 +54,8 @@ try {
   const { app, worker } = await ports.promise
   clearTimeout(timeout)
 
-  const built = spawnSync("bun", ["run", "--filter", "@cloudagents/desktop", "build"], {
-    cwd: root,
+  const built = spawnSync("bun", ["run", "build"], {
+    cwd: desktop,
     env,
     stdio: "inherit",
   })
