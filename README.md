@@ -78,6 +78,7 @@ Before a PR: `bun run typecheck` (and `bun run build:app` if `packages/app` chan
 | [`packages/kestrel-box`](packages/kestrel-box) | npm launcher for the `kestrel-box` binary (not a workspace). |
 | [`packages/protocol`](packages/protocol) | Shared Effect schemas: relay frames, control API, REST. |
 | [`packages/mobile`](packages/mobile) | Expo app ([README](packages/mobile/README.md)). |
+| [`packages/desktop`](packages/desktop) | Electron desktop app for the same SPA, with GitHub-release auto-updates ([README](packages/desktop/README.md)). |
 
 Deeper docs: [architecture and ownership](docs/architecture.md), [goal state](docs/goal-state.md), [the box: harnesses, sandbox and limits](docs/box.md), [bring your own box with cloud overflow (design)](docs/byo-box.md).
 
