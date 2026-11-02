@@ -66,7 +66,8 @@ bun run dev:desktop     # local Worker + fake box + desktop app, signed in as th
 `dev:desktop` starts the local stack, signs the dev user in, and opens Electron against the dev Worker with a separate
 user-data directory (`.data-dev/desktop`), so a production desktop install is untouched. The bundled UI includes every
 provider and the download page, and the Connections page reads the dev control plane, which has the provider catalog.
-Set `KESTREL_DEV_SLOT` to a free slot; it defaults to `7`.
+Set `KESTREL_DEV_SLOT` to a free slot; it defaults to `7`. `KESTREL_DEV_LOGIN` signs in as another local user (default
+`dev`), which is useful for checking that connections and keys are per account.
 
 ```sh
 bun run --filter @cloudagents/desktop dev     # build + open against the default control plane

@@ -80,7 +80,11 @@ try {
     }
   }
 
-  const login = await fetch(`http://localhost:${app}/auth/dev-login`, { redirect: "manual" })
+  const devLogin = process.env.KESTREL_DEV_LOGIN?.trim() || "dev"
+  const login = await fetch(
+    `http://localhost:${app}/auth/dev-login?login=${encodeURIComponent(devLogin)}`,
+    { redirect: "manual" },
+  )
   const setCookie = login.headers.get("set-cookie") ?? ""
   const session = /(?:^|;\s*)session=([^;]+)/.exec(setCookie)?.[1]
   if (session === undefined) throw new Error("the dev stack did not return a session; is DEV_SESSION_LOGIN set?")
