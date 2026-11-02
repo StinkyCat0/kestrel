@@ -371,6 +371,8 @@ export const FleetBox = Schema.Struct({
   state: FleetBoxState,
   /** Users assigned to this box. */
   users: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+  /** The one user this box is pinned to (a Nest VM); null for a shared managed box. */
+  owner: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
   createdAt: Schema.String,
 })
 export type FleetBox = typeof FleetBox.Type
@@ -378,7 +380,12 @@ export type FleetBox = typeof FleetBox.Type
 export const FleetBoxList = Schema.Struct({ boxes: Schema.Array(FleetBox) })
 export type FleetBoxList = typeof FleetBoxList.Type
 
-export const CreateFleetBoxBody = Schema.Struct({ name: BoxName, url: BoxUrl })
+/** `owner` pins a box to one user: that user is assigned to it before any shared box. */
+export const CreateFleetBoxBody = Schema.Struct({
+  name: BoxName,
+  url: BoxUrl,
+  owner: Schema.optional(Schema.NullOr(BoxName)),
+})
 export type CreateFleetBoxBody = typeof CreateFleetBoxBody.Type
 
 /** Every field optional. `state` can move between `active` and `draining`; nothing returns a box to `pending`. */

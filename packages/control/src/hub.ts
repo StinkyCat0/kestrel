@@ -674,7 +674,14 @@ export class Hub extends DurableObject<Env> {
     const sql = this.ctx.storage.sql
     const id = crypto.randomUUID()
     const secret = newSecret()
-    insertFleetBox(sql, { id, name: body.name, url: body.url, secret, createdAt: new Date().toISOString() })
+    insertFleetBox(sql, {
+      id,
+      name: body.name,
+      url: body.url,
+      secret,
+      owner: body.owner ?? null,
+      createdAt: new Date().toISOString(),
+    })
     const box = fleetBox(sql, id)
     if (box === null) throw new Error("managed box was not stored")
     return { box, secret }

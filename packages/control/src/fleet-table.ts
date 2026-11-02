@@ -34,8 +34,13 @@ export const ensureFleetTable = (sql: FleetSql): void => {
     url TEXT NOT NULL,
     secret TEXT NOT NULL,
     state TEXT NOT NULL,
+    owner TEXT,
     created_at TEXT NOT NULL
   )`)
+  const boxColumns = sql.exec<{ name: string }>("PRAGMA table_info(managed_boxes)").toArray()
+  if (!boxColumns.some((c) => c.name === "owner")) {
+    sql.exec("ALTER TABLE managed_boxes ADD COLUMN owner TEXT")
+  }
   const userColumns = sql.exec<{ name: string }>("PRAGMA table_info(users)").toArray()
   if (!userColumns.some((c) => c.name === "managed_box_id")) {
     sql.exec("ALTER TABLE users ADD COLUMN managed_box_id TEXT")
@@ -43,7 +48,7 @@ export const ensureFleetTable = (sql: FleetSql): void => {
 }
 
 /** The view of a box for the operator, with how many users are assigned to it. */
-const FLEET_BOX_COLUMNS = `mb.id, mb.name, mb.url, mb.state, mb.created_at AS createdAt,
+const FLEET_BOX_COLUMNS = `mb.id, mb.name, mb.url, mb.state, mb.owner, mb.created_at AS createdAt,
   (SELECT COUNT(*) FROM users u WHERE u.managed_box_id = mb.id) AS users`
 
 export const listFleetBoxes = (sql: FleetSql): FleetBox[] =>
@@ -55,14 +60,15 @@ export const fleetBox = (sql: FleetSql, id: string): FleetBox | null =>
 /** A new box starts `pending`: it gets no users until an operator activates it. */
 export const insertFleetBox = (
   sql: FleetSql,
-  box: { id: string; name: string; url: string; secret: string; createdAt: string },
+  box: { id: string; name: string; url: string; secret: string; owner?: string | null; createdAt: string },
 ): void => {
   sql.exec(
-    "INSERT INTO managed_boxes (id, name, url, secret, state, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
+    "INSERT INTO managed_boxes (id, name, url, secret, state, owner, created_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
     box.id,
     box.name,
     box.url,
     box.secret,
+    box.owner ?? null,
     box.createdAt,
   )
 }
@@ -103,6 +109,24 @@ export const deleteFleetBox = (sql: FleetSql, id: string): boolean => {
  * Pending boxes never receive users.
  */
 export const managedBoxFor = (sql: FleetSql, login: string): ManagedBoxRow | null => {
+  // A box pinned to this user (their Nest VM) wins over a shared assignment, including an older shared assignment.
+  const owned = sql
+    .exec<ManagedBoxRow>(
+      `SELECT mb.id, mb.url, mb.secret FROM managed_boxes mb
+       WHERE mb.owner = ? AND mb.state IN ('active', 'draining')
+       ORDER BY mb.created_at, mb.rowid LIMIT 1`,
+      login,
+    )
+    .toArray()[0]
+  if (owned !== undefined) {
+    const assigned = sql
+      .exec<{ id: string | null }>("SELECT managed_box_id AS id FROM users WHERE login = ?", login)
+      .toArray()[0]
+    if (assigned?.id !== owned.id) {
+      sql.exec("UPDATE users SET managed_box_id = ? WHERE login = ?", owned.id, login)
+    }
+    return owned
+  }
   const current = sql
     .exec<ManagedBoxRow>(
       `SELECT mb.id, mb.url, mb.secret FROM users u JOIN managed_boxes mb ON mb.id = u.managed_box_id

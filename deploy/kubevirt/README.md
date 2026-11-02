@@ -1,7 +1,8 @@
 # Per-user boxes on KubeVirt (MVP)
 
-Status: MVP. This is the compute layer for the Nest: one KubeVirt VM per box owner, running the existing
-`packages/server` box. It does not change the box contract or the control plane.
+Status: per-user fleet MVP. This is the compute layer for the Nest: one KubeVirt VM per box owner, running the existing
+`packages/server` box. The control plane pins each user to their owner box, so the app reaches the VM automatically.
+The box contract and desktop stream do not change.
 
 ## What it creates
 
@@ -80,9 +81,9 @@ The VM runs the same box as `kestrel-box install` on a laptop. Pick one:
 
 - **Own box (default).** The owner adds a box in **Settings › Boxes**, copies its id and secret (the secret is shown
   once), and you pass them to `create`. Afterwards set the box URL to `https://<host>` and select it as the active box.
-- **Managed fleet (`--managed`).** An operator creates the box in **Settings › Fleet** and passes its id/secret. Note
-  the current control plane assigns users to the active managed box with the fewest users; it cannot pin one user to one
-  box yet. Use this mode only when there is one user per box, or after the placement follow-up described below.
+- **Managed fleet (`--managed`).** An operator creates the box in **Settings › Fleet**, sets the user's login as
+  **Owner**, and passes its id/secret. The Hub assigns that user to this box before any shared managed box, so one VM
+  serves exactly one user. `scripts/nest-fleet.ts` does this and the VM in one command.
 
 The id and secret end up in the cloud-init Secret and in a mode-600 file inside the VM. Treat etcd and VM disk
 snapshots as secret material; use an external secret store before production.
@@ -116,6 +117,41 @@ virtctl console alice -n kestrel-nest
 
 The first boot installs packages and the agent CLIs; expect several minutes. `--wait` waits for the VMI's `Ready`
 condition, which is set before cloud-init finishes, so poll the health endpoint or the console for the box itself.
+
+## One VM per user (fleet)
+
+The control plane's managed boxes now take an optional `owner`. A user is assigned to an active/draining box pinned to
+them before any shared managed box, so a per-user VM becomes that user's box with no app-side switch.
+
+`scripts/nest-fleet.ts` reconciles a list of GitHub logins to boxes and VMs:
+
+```sh
+# Operator session cookie from a signed-in browser (Settings › Fleet is operator-only).
+export KESTREL_OPERATOR_COOKIE="session=…"
+
+bun scripts/nest-fleet.ts sync \
+  --users alice,bob \
+  --domain nest.example.com \
+  --cookie "$KESTREL_OPERATOR_COOKIE" \
+  --cluster-issuer letsencrypt-prod \
+  --storage-class fast \
+  --apply --wait
+```
+
+For each user it:
+
+1. finds an owned managed box, or creates one with `owner=<login>` (pending);
+2. finds the VM; if it is missing (or the box exists without a secret), rotates the box secret;
+3. renders and applies the same VM as `scripts/nest-vm.ts`;
+4. waits for the VMI's `Ready` condition and activates the box.
+
+Re-running is idempotent: an existing box + VM is left alone, and a pending box whose VM exists is activated. Without
+`--apply` it only prints what it would do. `delete --users … [--purge]` removes the VM, Service, Ingress, Secret, and
+the managed box; `--purge` also deletes the DataVolumes/PVCs. The Fleet page shows the owner on each row and accepts an
+owner when adding a box.
+
+The script needs `kubectl` and an operator cookie; it does not embed a cluster or credentials. Local `bun run dev`
+still uses its dev box — KubeVirt needs a real cluster with KVM.
 
 ## GPU
 
@@ -156,8 +192,8 @@ bun scripts/nest-vm.ts delete --name alice --purge
 
 ## Limits and next steps
 
-- **Control-plane placement.** Managed boxes are assigned by fewest users, not by owner. The next change is an optional
-  `owner` on `managed_boxes` and an assignment rule that prefers the owner's active box.
+- **Placement.** Owner-pinned boxes are assigned before shared boxes; a user without an owner box still gets the
+  fewest-users shared box or the relay. Deleting an owner box moves that user back to the shared pool.
 - **Lifecycle.** No idle suspend/park yet. KubeVirt snapshots and a host-level idle signal (`packages/server/src/activity.ts`)
   are the starting points.
 - **Images.** The default Ubuntu image and the latest box release are convenient, not pinned. Production should pin a
@@ -169,8 +205,9 @@ bun scripts/nest-vm.ts delete --name alice --purge
 ## Tests
 
 ```sh
-bun test scripts/nest-vm.test.ts
+bun test scripts/nest-vm.test.ts scripts/nest-fleet.test.ts packages/control/src/fleet-table.test.ts
 ```
 
-The tests cover resource shape, disk persistence, the ingress deny rules, managed/own modes, GPU opt-in and argument
-validation. They render manifests but do not talk to a cluster.
+The tests cover resource shape, disk persistence, the ingress deny rules, managed/own modes, GPU opt-in, fleet naming
+and options, and owner-pinned assignment (including the owner winning over a shared box and pending boxes not pinning).
+They render manifests and exercise the SQL rules but do not talk to a cluster.

@@ -15,8 +15,14 @@ import {
 let db: Database
 let sql: FleetSql
 
-const addBox = (id: string, createdAt: string, state: "active" | "draining" | "pending" = "active", secret = `${id}-secret`) => {
-  insertFleetBox(sql, { id, name: id, url: `https://${id}.example.com`, secret, createdAt })
+const addBox = (
+  id: string,
+  createdAt: string,
+  state: "active" | "draining" | "pending" = "active",
+  secret = `${id}-secret`,
+  owner: string | null = null,
+) => {
+  insertFleetBox(sql, { id, name: id, url: `https://${id}.example.com`, secret, owner, createdAt })
   if (state !== "pending") updateFleetBox(sql, id, { state })
 }
 
@@ -82,6 +88,25 @@ describe("managed box assignment", () => {
   test("a user with no active box is unassigned", () => {
     addUser("u1")
     expect(managedBoxFor(sql, "u1")).toBeNull()
+  })
+
+  test("a box pinned to the user wins over their shared assignment", () => {
+    addBox("shared", "2026-01-01T00:00:00Z")
+    addUser("u1")
+    addUser("u2")
+    expect(managedBoxFor(sql, "u1")?.id).toBe("shared")
+    addBox("vm-u1", "2026-02-01T00:00:00Z", "active", "vm-secret", "u1")
+    expect(managedBoxFor(sql, "u1")?.id).toBe("vm-u1")
+    expect(managedBoxFor(sql, "u2")?.id).toBe("shared")
+    expect(listFleetBoxes(sql).find((box) => box.id === "vm-u1")?.owner).toBe("u1")
+  })
+
+  test("a pending owner box does not pin anyone yet", () => {
+    addBox("shared", "2026-01-01T00:00:00Z")
+    addUser("u1")
+    expect(managedBoxFor(sql, "u1")?.id).toBe("shared")
+    addBox("vm-u1", "2026-02-01T00:00:00Z", "pending", "vm-secret", "u1")
+    expect(managedBoxFor(sql, "u1")?.id).toBe("shared")
   })
 
   test("deleting a box unassigns its users, who move to another active box on next lookup", () => {
