@@ -57,6 +57,7 @@ export interface FleetOptions {
   readonly port: number
   readonly gpuDevice: string | null
   readonly clusterIssuer: string | null
+  readonly ingressClass: string
   readonly sshKey: string | null
   readonly boxBinaryUrl: string
   readonly kubectl: string
@@ -139,6 +140,7 @@ export const parseSyncOptions = (argv: readonly string[]): FleetOptions => {
       port: { type: "string" },
       "gpu-device": { type: "string" },
       "cluster-issuer": { type: "string" },
+      "ingress-class": { type: "string" },
       "ssh-key-file": { type: "string" },
       "box-binary-url": { type: "string" },
       kubectl: { type: "string" },
@@ -177,6 +179,7 @@ export const parseSyncOptions = (argv: readonly string[]): FleetOptions => {
     port: integer(values.port ?? String(DEFAULT_PORT), "--port", 1, 65535),
     gpuDevice: gpu,
     clusterIssuer: values["cluster-issuer"]?.trim() || null,
+    ingressClass: values["ingress-class"]?.trim() || "nginx",
     sshKey,
     boxBinaryUrl: values["box-binary-url"] ?? DEFAULT_BOX_BINARY,
     kubectl: values.kubectl ?? "kubectl",
@@ -345,6 +348,7 @@ const vmOptions = (options: FleetOptions, user: string, box: { id: string; secre
   port: options.port,
   gpuDevice: options.gpuDevice,
   clusterIssuer: options.clusterIssuer,
+  ingressClass: options.ingressClass,
   sshKey: options.sshKey,
   boxBinaryUrl: options.boxBinaryUrl,
 })
@@ -458,6 +462,7 @@ Options:
   --cpus N / --memory SIZE (default: 4 / 8Gi)
   --gpu-device NAME        KubeVirt permitted device
   --cluster-issuer NAME    cert-manager ClusterIssuer
+  --ingress-class NAME     Ingress class (default: nginx; use traefik on k3s)
   --ssh-key-file PATH      SSH public key for the kestrel user
   --box-binary-url URL     kestrel-box release asset
   --kubectl PATH           kubectl binary (default: kubectl)

@@ -26,7 +26,7 @@ protocols:
 # updater's "latest GitHub release" lookup, which would otherwise trip over the repo's `box-v*` releases.
 publish:
   provider: generic
-  url: https://github.com/jarenm1/kestrel/releases/download/desktop-latest/
+  url: https://github.com/StinkyCat0/kestrel/releases/download/desktop-latest/
 
 linux:
   target:

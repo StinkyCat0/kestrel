@@ -11,7 +11,7 @@ import "@/stylesfrontend.css"
 // WebGL shader code only loads on the public pages.
 const PublicBackground = lazy(() => import("@/components/PublicBackground"))
 
-export const GITHUB_URL = "https://github.com/jarenm1/kestrel"
+export const GITHUB_URL = "https://github.com/StinkyCat0/kestrel"
 
 /** Where the public pages send people into the app; its root is the new chat (signed-out visitors sign in first). */
 export const APP_URL = `${APP_ORIGIN}/`

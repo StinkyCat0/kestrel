@@ -20,6 +20,7 @@ const DEFAULT_PORT = 8787
 
 /** Ubuntu 26.04 ships weston 15, above the 14 the desktop manager needs, plus the X11 build headers. */
 const PACKAGES = [
+  "blender",
   "bubblewrap",
   "build-essential",
   "ca-certificates",
@@ -34,6 +35,7 @@ const PACKAGES = [
   "nodejs",
   "npm",
   "openbox",
+  "openssh-server",
   "weston",
   "xterm",
   "xdotool",
@@ -59,6 +61,8 @@ export interface VmOptions {
   readonly port: number
   readonly gpuDevice: string | null
   readonly clusterIssuer: string | null
+  /** Ingress controller class; k3s ships `traefik`, most other clusters `nginx`. */
+  readonly ingressClass: string
   readonly sshKey: string | null
   readonly boxBinaryUrl: string
 }
@@ -130,6 +134,7 @@ export const parseCreateOptions = (argv: readonly string[]): CreateOptions => {
       port: { type: "string" },
       "gpu-device": { type: "string" },
       "cluster-issuer": { type: "string" },
+      "ingress-class": { type: "string" },
       "ssh-key-file": { type: "string" },
       "box-binary-url": { type: "string" },
       kubectl: { type: "string" },
@@ -170,6 +175,7 @@ export const parseCreateOptions = (argv: readonly string[]): CreateOptions => {
     port: integer(values.port ?? String(DEFAULT_PORT), "--port", 1, 65535),
     gpuDevice: gpu,
     clusterIssuer: values["cluster-issuer"]?.trim() || null,
+    ingressClass: values["ingress-class"]?.trim() || "nginx",
     sshKey,
     boxBinaryUrl: values["box-binary-url"] ?? DEFAULT_BOX_BINARY,
     kubectl: values.kubectl ?? "kubectl",
@@ -247,6 +253,11 @@ const bootstrapScript = (options: VmOptions): string =>
     "",
     "DISK=/dev/disk/by-id/virtio-kestrel-data",
     'for _ in $(seq 1 120); do [ -e "$DISK" ] && break; sleep 1; done',
+    'if [ ! -e "$DISK" ]; then',
+    "  # Newer KubeVirt rejects disk serials; the data disk is the largest virtio disk (the OS disk is smaller).",
+    '  DATA=$(lsblk -bndo NAME,SIZE,TYPE | awk \'$3=="disk" {print $2, $1}\' | sort -nr | head -1 | awk \'{print $2}\')',
+    '  DISK="/dev/$DATA"',
+    "fi",
     'if [ ! -e "$DISK" ]; then echo "kestrel data disk is missing" >&2; exit 1; fi',
     'if ! blkid "$DISK" >/dev/null 2>&1; then mkfs.ext4 -F -L kestrel-data "$DISK"; fi',
     "mkdir -p /var/lib/kestrel",
@@ -355,7 +366,10 @@ export const render = (options: VmOptions): Manifest => {
       policyTypes: ["Ingress", "Egress"],
       ingress: [
         {
-          from: [{ namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "ingress-nginx" } } }],
+          from: [
+            { namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "ingress-nginx" } } },
+            { namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "kube-system" } } },
+          ],
           ports: [{ protocol: "TCP", port: options.port }],
         },
       ],
@@ -385,7 +399,7 @@ export const render = (options: VmOptions): Manifest => {
               disks: [
                 { name: "os", disk: { bus: "virtio" } },
                 { name: "cloudinit", disk: { bus: "virtio" } },
-                { name: "data", disk: { bus: "virtio", serial: "kestrel-data" } },
+                { name: "data", disk: { bus: "virtio" } },
               ],
               interfaces: [{ name: "default", masquerade: {} }],
               ...(options.gpuDevice === null
@@ -396,7 +410,7 @@ export const render = (options: VmOptions): Manifest => {
           networks: [{ name: "default", pod: {} }],
           volumes: [
             { name: "os", dataVolume: { name: `os-${name}` } },
-            { name: "cloudinit", cloudInitNoCloud: { userDataSecretRef: { name: `cloudinit-${name}` } } },
+            { name: "cloudinit", cloudInitNoCloud: { secretRef: { name: `cloudinit-${name}` } } },
             { name: "data", dataVolume: { name: `data-${name}` } },
           ],
         },
@@ -433,8 +447,10 @@ export const render = (options: VmOptions): Manifest => {
       },
     },
     spec: {
-      ingressClassName: "nginx",
-      tls: [{ hosts: [options.host], secretName: `${name}-tls` }],
+      ingressClassName: options.ingressClass,
+      ...(options.clusterIssuer === null
+        ? {}
+        : { tls: [{ hosts: [options.host], secretName: `${name}-tls` }] }),
       rules: [
         {
           host: options.host,
@@ -536,6 +552,7 @@ create options:
   --port N                 box port (default: ${DEFAULT_PORT})
   --gpu-device NAME        KubeVirt permitted device, e.g. nvidia.com/TU104GL_Tesla_T4
   --cluster-issuer NAME    cert-manager ClusterIssuer for the Ingress
+  --ingress-class NAME     Ingress class (default: nginx; use traefik on k3s)
   --ssh-key-file PATH      SSH public key for the kestrel user
   --box-binary-url URL     kestrel-box release asset
   --kubectl PATH           kubectl binary (default: kubectl)

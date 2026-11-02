@@ -144,7 +144,8 @@ const GithubAsset = Schema.Struct({
   size: Schema.Number,
 })
 const GithubRelease = Schema.Struct({ assets: Schema.Array(GithubAsset) })
-const DESKTOP_RELEASE_URL = "https://api.github.com/repos/jarenm1/kestrel/releases/tags/desktop-latest"
+const DESKTOP_REPO = import.meta.env.VITE_DESKTOP_REPO ?? "StinkyCat0/kestrel"
+const DESKTOP_RELEASE_URL = `https://api.github.com/repos/${DESKTOP_REPO}/releases/tags/desktop-latest`
 
 /** The `desktop-latest` release; an unpublished release is an empty list, not an error. */
 const fetchDesktopRelease = async (): Promise<DesktopRelease> => {

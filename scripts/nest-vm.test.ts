@@ -46,10 +46,7 @@ describe("nest VM manifest", () => {
       "docker://quay.io/containerdisks/ubuntu:26.04",
     )
     expect(record(dvTemplates[1]?.["spec"])["source"]).toEqual({ blank: {} })
-    expect(record(list(record(domain["devices"])["disks"])[2])["disk"]).toEqual({
-      bus: "virtio",
-      serial: "kestrel-data",
-    })
+    expect(record(list(record(domain["devices"])["disks"])[2])["disk"]).toEqual({ bus: "virtio" })
     expect(record(domain["cpu"])["cores"]).toBe(4)
     expect(record(domain["memory"])["guest"]).toBe("8Gi")
   })
@@ -62,11 +59,27 @@ describe("nest VM manifest", () => {
     expect(record(list(serviceSpec["ports"])[0])["port"]).toBe(8787)
     const ingress = resource(manifest, "Ingress")
     const ingressSpec = record(ingress["spec"])
+    expect(ingressSpec["ingressClassName"]).toBe("nginx")
     expect(record(list(ingressSpec["rules"])[0])["host"]).toBe("alice.nest.example.com")
     expect(record(list(ingressSpec["tls"])[0])["secretName"]).toBe("alice-tls")
     const annotations = record(record(ingress["metadata"])["annotations"])
     expect(annotations["cert-manager.io/cluster-issuer"]).toBe("letsencrypt")
     expect(annotations["nginx.ingress.kubernetes.io/server-snippet"]).toContain("^/(mcp|broker|gh)")
+  })
+
+  test("uses traefik and HTTP only when no cert-manager issuer is configured", () => {
+    const manifest = render(base(["--ingress-class", "traefik"]))
+    const ingress = resource(manifest, "Ingress")
+    const spec = record(ingress["spec"])
+    expect(spec["ingressClassName"]).toBe("traefik")
+    expect(spec).not.toHaveProperty("tls")
+    const policy = resource(manifest, "NetworkPolicy")
+    const policySpec = record(policy["spec"])
+    const from = list(record(list(policySpec["ingress"])[0])["from"])
+    expect(from).toEqual([
+      { namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "ingress-nginx" } } },
+      { namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "kube-system" } } },
+    ])
   })
 
   test("includes the box identity and data disk setup in cloud-init", () => {
