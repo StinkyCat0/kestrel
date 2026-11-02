@@ -12,11 +12,14 @@ export const ModelProvider = Schema.Literal(
   "deepseek",
   "minimax",
   "moonshot",
+  "omp",
+  "pi",
+  "hermes",
 )
 export type ModelProvider = typeof ModelProvider.Type
 
-/** The CLI that runs a provider's models. */
-export const AgentHarness = Schema.Literal("claude", "codex")
+/** The CLI that runs a provider's models. `acp` is a CLI that speaks the Agent Client Protocol over stdio. */
+export const AgentHarness = Schema.Literal("claude", "codex", "acp")
 export type AgentHarness = typeof AgentHarness.Type
 
 /**
@@ -67,6 +70,9 @@ export const AgentModel = Schema.Literal(
   "kimi-k3.1-pro",
   "kimi-k3[1m]",
   "kimi-k2.7-code",
+  "omp-default",
+  "pi-default",
+  "hermes-default",
 )
 export type AgentModel = typeof AgentModel.Type
 
@@ -123,6 +129,10 @@ export const AGENT_MODELS: readonly ModelInfo[] = [
   { id: "kimi-k3.1-pro", provider: "moonshot", name: "Kimi K3.1 Pro", efforts: CLAUDE_NO_XHIGH, shownByDefault: true },
   { id: "kimi-k3[1m]", provider: "moonshot", name: "Kimi K3", efforts: CLAUDE_NO_XHIGH, shownByDefault: false },
   { id: "kimi-k2.7-code", provider: "moonshot", name: "Kimi K2.7 Code", efforts: [], shownByDefault: false },
+  // ACP harnesses use the model configured inside the CLI; the catalog entry only selects the harness.
+  { id: "omp-default", provider: "omp", name: "OMP (configured model)", efforts: [], shownByDefault: true },
+  { id: "pi-default", provider: "pi", name: "Pi (configured model)", efforts: [], shownByDefault: true },
+  { id: "hermes-default", provider: "hermes", name: "Hermes (configured model)", efforts: [], shownByDefault: true },
 ]
 
 export interface ModelProviderInfo {
@@ -132,6 +142,10 @@ export interface ModelProviderInfo {
   readonly harness: AgentHarness
   /** `Connection.provider` ids that give the box access to this provider's models: an API key or a CLI login. */
   readonly connections: readonly string[]
+  /** A harness whose CLI carries its own login/config on the box; no Connections key is required to select it. */
+  readonly standalone?: boolean
+  /** The command a user runs on the box to sign the standalone harness's CLI in. */
+  readonly setup?: string
 }
 
 export const MODEL_PROVIDERS: readonly ModelProviderInfo[] = [
@@ -142,6 +156,9 @@ export const MODEL_PROVIDERS: readonly ModelProviderInfo[] = [
   { id: "deepseek", name: "DeepSeek", harness: "claude", connections: ["deepseek"] },
   { id: "minimax", name: "MiniMax", harness: "claude", connections: ["minimax"] },
   { id: "moonshot", name: "Kimi (Moonshot AI)", harness: "claude", connections: ["moonshot"] },
+  { id: "omp", name: "OMP", harness: "acp", connections: [], standalone: true, setup: "omp login" },
+  { id: "pi", name: "Pi", harness: "acp", connections: [], standalone: true, setup: "pi  (then /login in Pi)" },
+  { id: "hermes", name: "Hermes", harness: "acp", connections: [], standalone: true, setup: "hermes setup" },
 ]
 
 /** The provider a message without a model runs on: the box's default harness. */
@@ -173,7 +190,11 @@ export const defaultModelOf = (provider: ModelProvider): ModelInfo | undefined =
 export const connectedModelProviders = (
   connections: ReadonlyArray<{ readonly provider: string; readonly connected: boolean }>,
 ): readonly ModelProviderInfo[] =>
-  MODEL_PROVIDERS.filter((p) => connections.some((c) => c.connected && p.connections.includes(c.provider)))
+  MODEL_PROVIDERS.filter(
+    (p) =>
+      p.standalone === true ||
+      connections.some((c) => c.connected && p.connections.includes(c.provider)),
+  )
 
 /**
  * The provider's models in the chat picker, in catalog order. `chosen` is the user's saved list for the provider

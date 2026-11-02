@@ -1,9 +1,10 @@
 import { Context, Effect, Either, Layer, Runtime, Schema } from "effect"
 import { spawn, type ChildProcess } from "node:child_process"
 import { createWriteStream, type WriteStream } from "node:fs"
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
+import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises"
 import { createInterface } from "node:readline"
 import { basename, join } from "node:path"
+import { homedir } from "node:os"
 import {
   InternalError,
   RunItems,
@@ -23,7 +24,7 @@ import {
   type Task,
 } from "@cloudagents/protocol"
 import { CliAuth } from "../cliauth"
-import { CredentialBroker } from "../broker"
+import { CredentialBroker, type BrokerProvider } from "../broker"
 import { Config, VERSION } from "../config"
 import { GH_SHIM_SCRIPT } from "../gh/shim"
 import { NEW_PROCESS_GROUP, killProcessGroup, ownGroup } from "../process"
@@ -32,6 +33,7 @@ import { EventHub } from "./events"
 import { StateStore, newId, nowIso, type Mutable, type StoreState } from "./state"
 import { makeClaudeDriver } from "./claude-stream"
 import { makeCodexDriver, type CodexRunInput } from "./codex-app-server"
+import { makeAcpDriver } from "./acp-driver"
 import type { RunDriver } from "./run-driver"
 import { saveRunImage } from "./run-images"
 import { makeTranscript, type Transcript } from "./transcript"
@@ -114,12 +116,37 @@ interface ActiveRun {
   driver: RunDriver | null
   /** True when stderr is the CLI's own log (Codex app-server), not output worth showing as the agent's answer. */
   readonly stderrIsLog: boolean
+  /** True for an ACP run: the driver owns item creation; the stream is not passed through the transcript. */
+  readonly acp: boolean
 }
 
 /** How the harness talks to a run's CLI over stdin. */
 type RunConversation =
   | { readonly kind: "codex"; readonly input: Omit<CodexRunInput, "clientVersion"> }
   | { readonly kind: "claude"; readonly prompt: string }
+  | {
+      readonly kind: "acp"
+      readonly input: {
+        readonly prompt: string
+        readonly provider: ModelProvider
+        readonly resumeSession: string | null
+        readonly cwd: string
+        readonly mcpUrl: string
+        readonly mcpToken: string
+        readonly clientVersion: string
+      }
+    }
+
+/** The CLI config directory each ACP harness reads its own model login from. */
+const ACP_CONFIG_DIRS: Partial<Record<ModelProvider, string>> = {
+  omp: ".omp",
+  pi: ".pi",
+  hermes: ".hermes",
+}
+
+/** A broker provider for a model run, or null when the ACP harness owns its own model credentials. */
+const brokerProviderOf = (provider: ModelProvider): BrokerProvider | null =>
+  provider === "omp" || provider === "pi" || provider === "hermes" ? null : provider
 
 /** What a run starts from besides its process: the session's last context use, and its conversation if it has one. */
 interface RunSession {
@@ -344,8 +371,16 @@ export const AgentHarnessLive = Layer.effect(
           const failure = turn?.status === "failed" ? turn.error : null
           const stdout = entry.stdoutLines.join("\n").trim()
           const stderr = entry.stderrIsLog ? "" : entry.stderrLines.join("\n").trim()
+          const acpText = entry.acp
+            ? [...entry.items.values()]
+                .filter((item): item is AgentItem & { _tag: "text" } => item._tag === "text")
+                .map((item) => item.text)
+                .join("\n\n")
+                .trim()
+            : ""
+          const finalText = entry.transcript.finalText() ?? (acpText === "" ? null : acpText)
           const text =
-            entry.transcript.finalText() ??
+            finalText ??
             ((entry.stderrIsLog ? (failure ?? stdout) : stdout || stderr || failure) ||
               (ok ? "Run finished with no output." : `Run failed (exit code ${exitCode ?? "none"}).`))
           const message: Message = {
@@ -427,6 +462,8 @@ export const AgentHarnessLive = Layer.effect(
         try {
           const parsed: unknown = JSON.parse(trimmed)
           entry.driver?.receive(parsed)
+          // ACP updates are decoded by its driver into items; there is no Claude/Codex transcript to run.
+          if (entry.acp) return
           // Every parsed line goes through the run's transcript, whether or not it yields items.
           for (const item of entry.transcript.push(parsed)) putItem(runId, entry, item)
           const context = entry.transcript.context()
@@ -488,7 +525,9 @@ export const AgentHarnessLive = Layer.effect(
               context: session.seed,
               sessionId: null,
               driver: null,
-              stderrIsLog: session.conversation?.kind === "codex",
+              stderrIsLog:
+                session.conversation?.kind === "codex" || session.conversation?.kind === "acp",
+              acp: session.conversation?.kind === "acp",
             }
             const stdin = child.stdin
             // A closed pipe (the CLI is gone) shows up as the child's exit, not as a write error.
@@ -502,7 +541,7 @@ export const AgentHarnessLive = Layer.effect(
             // onDone means all model work is over and the process is merely waiting to exit.
             const onDone = () => {
               stdin.end()
-              if (session.conversation?.kind === "codex") {
+              if (session.conversation?.kind === "codex" || session.conversation?.kind === "acp") {
                 setTimeout(() => active.has(run.id) && killProcessGroup(child.pid, "SIGTERM"), KILL_GRACE_MS).unref()
               }
             }
@@ -522,6 +561,16 @@ export const AgentHarnessLive = Layer.effect(
                   onDone,
                 },
               )
+            } else if (conversation.kind === "acp") {
+              entry.driver = makeAcpDriver(conversation.input, {
+                send,
+                onThread: (sessionId) => {
+                  entry.sessionId = sessionId
+                  runFork(recordSession(run.id, sessionId, entry.provider))
+                },
+                onDone,
+                onItem: (item) => putItem(run.id, entry, item),
+              })
             } else {
               // Claude Code names its session in its stream-json `init`, which `handleLine` records.
               entry.driver = makeClaudeDriver(conversation.prompt, { send, onDone })
@@ -606,10 +655,20 @@ export const AgentHarnessLive = Layer.effect(
           // The run's `gh`: a script that asks the box to run GitHub CLI commands, so no GitHub token enters the sandbox.
           const ghBinHost = join(homeDir, ".kestrel", "gh")
           const ghBinAgent = join(agentHome(settings, homeDir), ".kestrel", "gh")
+          // An ACP harness reads its own model login from this directory; sandboxed runs get it bound in, and
+          // unsandboxed runs symlink it into the task home (their HOME) so the CLI finds the same config.
+          const acpConfigDir = harness === "acp" ? ACP_CONFIG_DIRS[provider] : undefined
+          const acpConfigHost = acpConfigDir === undefined ? null : join(homedir(), acpConfigDir)
+          const acpConfigInside =
+            acpConfigDir === undefined ? null : join(agentHome(settings, homeDir), acpConfigDir)
+          const acpBinds =
+            acpConfigHost !== null && acpConfigInside !== null && settings.level !== "off"
+              ? [{ host: acpConfigHost, sandbox: acpConfigInside }]
+              : []
 
           const started = yield* Effect.gen(function* () {
-            // The run's token authorizes its MCP session as well as its model calls.
-            const lease = yield* broker.issue(run.id, user, provider)
+            // The run's token authorizes its MCP session; ACP harnesses broker no model calls of their own.
+            const lease = yield* broker.issue(run.id, user, brokerProviderOf(provider))
             yield* Effect.tryPromise({
               try: async () => {
                 await mkdir(join(homeDir, ".cloudagents"), { recursive: true })
@@ -624,6 +683,14 @@ export const AgentHarnessLive = Layer.effect(
                 await mkdir(ghBinHost, { recursive: true })
                 await writeFile(join(ghBinHost, "gh"), GH_SHIM_SCRIPT, { encoding: "utf8", mode: 0o755 })
                 await chmod(join(ghBinHost, "gh"), 0o755)
+                if (acpConfigHost !== null && acpConfigDir !== undefined) {
+                  await mkdir(acpConfigHost, { recursive: true })
+                  if (settings.level === "off") {
+                    await symlink(acpConfigHost, join(homeDir, acpConfigDir)).catch((e: NodeJS.ErrnoException) => {
+                      if (e.code !== "EEXIST") throw e
+                    })
+                  }
+                }
               },
               catch: (e) => new InternalError({ message: `cannot prepare run dir: ${String(e)}` }),
             })
@@ -691,7 +758,7 @@ export const AgentHarnessLive = Layer.effect(
               },
               command: config.agentCommands[provider],
               roBinds: config.fakeAgentRoBinds,
-              binds: loginDirs.map((d) => ({ host: d.host, sandbox: d.inside })),
+              binds: [...loginDirs.map((d) => ({ host: d.host, sandbox: d.inside })), ...acpBinds],
               pathPrefix: [ghBinAgent],
             })
 
@@ -727,7 +794,20 @@ export const AgentHarnessLive = Layer.effect(
                           apiKey: keptBroker.OPENAI_API_KEY,
                         },
                       }
-                    : { kind: "claude", prompt },
+                    : harness === "acp"
+                      ? {
+                          kind: "acp",
+                          input: {
+                            prompt,
+                            provider,
+                            resumeSession,
+                            cwd: join(config.threadsDir, task.id),
+                            mcpUrl,
+                            mcpToken: lease.token,
+                            clientVersion: VERSION,
+                          },
+                        }
+                      : { kind: "claude", prompt },
               },
             )
           }).pipe(Effect.either)

@@ -119,12 +119,24 @@ export const loadConfig = (): ServerConfig => {
   const dataDir = resolve(process.env.CLOUDAGENTS_DATA_DIR ?? join(repoRoot, ".data"))
   const fakeAgent = process.env.CLOUDAGENTS_FAKE_AGENT === "1"
   const fakeCommand = `${shellQuote(process.execPath)} ${shellQuote(join(repoRoot, "packages/server/scripts/fake-agent.ts"))}`
-  const harnessCommands: Record<AgentHarness, string> = {
+  const harnessCommands: Record<Exclude<AgentHarness, "acp">, string> = {
     claude: process.env.CLOUDAGENTS_ANTHROPIC_COMMAND ?? DEFAULT_ANTHROPIC_COMMAND,
     codex: process.env.CLOUDAGENTS_OPENAI_COMMAND ?? DEFAULT_OPENAI_COMMAND,
   }
+  const acpCommands: Partial<Record<ModelProvider, string>> = {
+    omp: process.env.CLOUDAGENTS_OMP_COMMAND ?? "omp acp",
+    pi: process.env.CLOUDAGENTS_PI_COMMAND ?? "pi-acp",
+    hermes: process.env.CLOUDAGENTS_HERMES_COMMAND ?? "hermes acp",
+  }
   const agentCommands: Record<ModelProvider, string> = Object.fromEntries(
-    MODEL_PROVIDERS.map((provider) => [provider.id, fakeAgent ? fakeCommand : harnessCommands[provider.harness]]),
+    MODEL_PROVIDERS.map((provider) => [
+      provider.id,
+      fakeAgent
+        ? fakeCommand
+        : provider.harness === "acp"
+          ? (acpCommands[provider.id] as string)
+          : harnessCommands[provider.harness],
+    ]),
   ) as Record<ModelProvider, string>
   const sandboxPath = process.env.CLOUDAGENTS_SANDBOX_PATH?.trim() || null
   const sandbox = sandboxLevel(sandboxPath)

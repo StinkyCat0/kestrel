@@ -124,7 +124,13 @@ function ModelListRow({ provider, connected }: { provider: ModelProviderInfo; co
     <div className="flex items-center gap-3 px-5 py-4">
       <div className="flex flex-col gap-0.5">
         <ConnectionHeader label={provider.name} connected={connected} />
-        {!connected && <span className="text-xs text-muted-foreground">Connect a key or subscription above to use these.</span>}
+        {provider.standalone ? (
+          <span className="text-xs text-muted-foreground">
+            Uses the CLI login configured on the box{provider.setup === undefined ? "." : ` — run ${provider.setup}.`}
+          </span>
+        ) : (
+          !connected && <span className="text-xs text-muted-foreground">Connect a key or subscription above to use these.</span>
+        )}
       </div>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

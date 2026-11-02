@@ -9,10 +9,20 @@ import { handleBroker } from "./handler"
 const BASE = "http://127.0.0.1:8787/broker/run-token"
 
 describe("broker provider mapping", () => {
-  test("every model provider has an upstream and at least one model", () => {
-    expect(BROKER_PROVIDERS).toEqual(MODEL_PROVIDERS.map((p) => p.id))
+  test("every brokered provider has an upstream and every model provider has a model", () => {
+    expect(BROKER_PROVIDERS).toEqual([
+      "anthropic",
+      "openai",
+      "openrouter",
+      "zai",
+      "deepseek",
+      "minimax",
+      "moonshot",
+    ])
+    for (const provider of BROKER_PROVIDERS) {
+      expect(UPSTREAM_BASE[provider]).toMatch(/^https:\/\//)
+    }
     for (const provider of MODEL_PROVIDERS) {
-      expect(UPSTREAM_BASE[provider.id]).toMatch(/^https:\/\//)
       expect(providerModels(provider.id).length).toBeGreaterThan(0)
     }
   })

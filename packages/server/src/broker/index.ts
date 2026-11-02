@@ -4,9 +4,18 @@ import { MODEL_PROVIDERS, type ModelProvider, type RelayCredentials } from "@clo
 import { Config } from "../config"
 import { CredentialStore } from "../credentials"
 
-export type BrokerProvider = ModelProvider
+/** Providers Kestrel brokers model calls for. ACP harnesses bring their own login and are not brokered. */
+export type BrokerProvider = Exclude<ModelProvider, "omp" | "pi" | "hermes">
 
-export const BROKER_PROVIDERS: ReadonlyArray<BrokerProvider> = MODEL_PROVIDERS.map((p) => p.id)
+export const BROKER_PROVIDERS: ReadonlyArray<BrokerProvider> = [
+  "anthropic",
+  "openai",
+  "openrouter",
+  "zai",
+  "deepseek",
+  "minimax",
+  "moonshot",
+]
 
 /** Where each provider's broker path forwards. Anthropic-compatible providers receive Claude Code's `/v1/messages`. */
 export const UPSTREAM_BASE: Record<BrokerProvider, string> = {
@@ -64,8 +73,8 @@ export interface BrokerLease {
 }
 
 export interface CredentialBrokerShape {
-  /** Mints a per-run token, with env pointing the run's CLI at `provider`. */
-  readonly issue: (runId: string, user: string, provider: BrokerProvider) => Effect.Effect<BrokerLease>
+  /** Mints a per-run token, with env pointing the run's CLI at `provider` (none for an ACP harness). */
+  readonly issue: (runId: string, user: string, provider: BrokerProvider | null) => Effect.Effect<BrokerLease>
   /** Invalidates the run's token and notifies revoke listeners. Idempotent. */
   readonly revoke: (runId: string) => Effect.Effect<void>
   /** Grant for a live token; null when unknown or revoked. */
@@ -117,7 +126,7 @@ export const CredentialBrokerLive = Layer.effect(
           grantByToken.set(token, { runId, user })
           tokenByRun.set(runId, token)
           const base = `http://127.0.0.1:${config.port}/broker/${token}`
-          return { token, env: brokerEnv(provider, base, token) }
+          return { token, env: provider === null ? {} : brokerEnv(provider, base, token) }
         }),
       revoke: (runId) => Effect.sync(() => revokeSync(runId)),
       grantForToken: (token) => Effect.sync(() => grantFor(token)),
