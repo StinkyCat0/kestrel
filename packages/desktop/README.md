@@ -60,10 +60,20 @@ fallback once the control-plane route is deployed. A `.deb` registers both schem
 
 ```sh
 bun install
-bun run --filter @cloudagents/desktop dev     # builds the app + main, opens Electron
+bun run dev:desktop     # local Worker + fake box + desktop app, signed in as the dev user
 ```
 
-- `KESTREL_CONTROL_URL` points the desktop at another control plane (for example a local `bun run dev` Worker).
+`dev:desktop` starts the local stack, signs the dev user in, and opens Electron against the dev Worker with a separate
+user-data directory (`.data-dev/desktop`), so a production desktop install is untouched. The bundled UI includes every
+provider and the download page, and the Connections page reads the dev control plane, which has the provider catalog.
+Set `KESTREL_DEV_SLOT` to a free slot; it defaults to `7`.
+
+```sh
+bun run --filter @cloudagents/desktop dev     # build + open against the default control plane
+```
+
+- `KESTREL_CONTROL_URL` points the desktop at another control plane. `KESTREL_DESKTOP_DEV_SESSION` seeds a session only
+  for a loopback HTTP control; it is how `dev:desktop` signs in without a browser.
 - `dev` serves the built app, not Vite HMR. Use `bun run dev` and the browser for UI work; use the desktop build to
   exercise the shell, auth and the packaged app.
 - The machine needs a graphical session. CI builds the installers headlessly.
