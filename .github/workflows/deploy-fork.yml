@@ -1,0 +1,31 @@
+name: Deploy fork control
+
+# Manual only: a fork must set its own Cloudflare secrets and GitHub OAuth app first.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the SPA served by the Worker
+        run: bun run build:app
+
+      - name: Deploy
+        working-directory: packages/control
+        run: bunx wrangler deploy --config wrangler.fork.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
