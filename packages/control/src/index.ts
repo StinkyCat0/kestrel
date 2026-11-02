@@ -5,6 +5,7 @@ import { handlePrWatch } from "./pr-watch"
 import { handleBoxAutomations } from "./automations"
 import { decodeBody, errorResponse, json, safeEqual, UpstreamError } from "./http"
 import { hub, type Env } from "./env"
+import { SITE_HOSTS, serveAppPage } from "./pages"
 import { handleGithubWebhook } from "./webhooks"
 
 export { Hub } from "./hub"
@@ -71,11 +72,6 @@ const managedBoxAutomations = async (request: Request, env: Env, url: URL): Prom
 const isBoxAutomationPath = (pathname: string): boolean =>
   pathname === ControlPaths.boxAutomations || pathname.startsWith(`${ControlPaths.boxAutomations}/`)
 
-/**
- * The marketing hosts serve only the app's public pages. Sessions live on the app host, so sign-in and API calls
- * that land here (e.g. an old bookmark) move there with the same path.
- */
-const SITE_HOSTS: Record<string, true> = { "kestrel-agent.com": true, "www.kestrel-agent.com": true }
 const APP_ORIGIN = "https://app.kestrel-agent.com"
 
 /**
@@ -157,7 +153,7 @@ export default {
         const origin = url.pathname === ControlPaths.me ? publicSiteOrigin(request, env) : null
         return origin ? withCors(response, origin) : response
       }
-      return env.ASSETS.fetch(request)
+      return await serveAppPage(request, env.ASSETS, url)
     } catch (err) {
       if (err instanceof UpstreamError) return errorResponse(502, "BadGateway", err.message)
       console.error(err)
