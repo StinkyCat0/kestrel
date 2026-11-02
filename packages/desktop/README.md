@@ -51,6 +51,11 @@ sequenceDiagram
 `packages/control/src/auth.ts` adds `/auth/desktop-callback`, sharing the mobile callback helper. The custom scheme is
 registered by Electron and in the packaged app (`protocols` in `electron-builder.yml`).
 
+**Older control planes:** the app probes `/auth/desktop-callback` before opening sign-in. A `404` means the deployed
+Worker predates this change, so the app returns through `/auth/mobile-callback` and registers the mobile `kestrel://`
+scheme instead. The browser briefly says "Kestrel mobile"; the session still arrives in the desktop app. Remove this
+fallback once the control-plane route is deployed. A `.deb` registers both schemes.
+
 ## Development
 
 ```sh

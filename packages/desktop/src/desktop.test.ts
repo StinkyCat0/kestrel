@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import WebSocket, { WebSocketServer } from "ws"
-import { loginUrl, parseCallback, safeLocalPath } from "./auth"
+import { callbackPath, loginUrl, parseCallback, safeLocalPath, type CallbackPath } from "./auth"
 import { startDesktopServer, type DesktopServer } from "./server"
 
 const cleanups: Array<() => Promise<void> | void> = []
@@ -66,7 +66,7 @@ const fakeApp = async (): Promise<string> => {
   return dir
 }
 
-const start = async (): Promise<{
+const start = async (callback: CallbackPath = "/auth/desktop-callback"): Promise<{
   desktop: DesktopServer
   controlUrl: string
   cleared: () => boolean
@@ -79,6 +79,7 @@ const start = async (): Promise<{
   const desktop = await startDesktopServer({
     appDist,
     controlUrl: control.url,
+    callbackPath: callback,
     getSession: async () => "session-id",
     clearSession: async () => {
       cleared = true
@@ -89,9 +90,9 @@ const start = async (): Promise<{
 }
 
 describe("desktop auth helpers", () => {
-  test("parses only the desktop callback", () => {
+  test("parses the desktop and mobile fallback callbacks", () => {
     expect(parseCallback("kestrel-desktop://auth-callback?session=abc")).toBe("abc")
-    expect(parseCallback("kestrel://auth-callback?session=abc")).toBeNull()
+    expect(parseCallback("kestrel://auth-callback?session=abc")).toBe("abc")
     expect(parseCallback("kestrel-desktop://other?session=abc")).toBeNull()
     expect(parseCallback("kestrel-desktop://auth-callback")).toBeNull()
     expect(parseCallback("not a url")).toBeNull()
@@ -101,10 +102,27 @@ describe("desktop auth helpers", () => {
     expect(loginUrl("https://app.example/")).toBe(
       "https://app.example/auth/github/login?return=%2Fauth%2Fdesktop-callback",
     )
+    expect(loginUrl("https://app.example/", "/auth/mobile-callback")).toBe(
+      "https://app.example/auth/github/login?return=%2Fauth%2Fmobile-callback",
+    )
     expect(safeLocalPath("/c/123?x=1")).toBe("/c/123?x=1")
     expect(safeLocalPath("//evil.example")).toBe("/")
     expect(safeLocalPath("https://evil.example")).toBe("/")
     expect(safeLocalPath(null)).toBe("/")
+  })
+
+  test("falls back to the mobile callback only when the desktop route is missing", async () => {
+    expect(await callbackPath("https://app.example", async () => new Response(null, { status: 404 }))).toBe(
+      "/auth/mobile-callback",
+    )
+    expect(await callbackPath("https://app.example", async () => new Response(null, { status: 401 }))).toBe(
+      "/auth/desktop-callback",
+    )
+    expect(
+      await callbackPath("https://app.example", async () => {
+        throw new Error("unreachable")
+      }),
+    ).toBe("/auth/desktop-callback")
   })
 })
 
@@ -174,5 +192,17 @@ describe("desktop proxy", () => {
       `${controlUrl}/auth/github/login?return=%2Fauth%2Fdesktop-callback`,
     )
     expect(desktop.takePendingReturn()).toBe("/c/9")
+  })
+
+  test("uses the mobile callback on a control plane without the desktop route", async () => {
+    const { desktop, controlUrl } = await start("/auth/mobile-callback")
+    const token = desktop.bootstrapPath.split("/").pop() ?? ""
+    const response = await fetch(`${desktop.origin}/auth/github/login`, {
+      redirect: "manual",
+      headers: { cookie: `kestrel_desktop=${token}` },
+    })
+    expect(response.headers.get("location")).toBe(
+      `${controlUrl}/auth/github/login?return=%2Fauth%2Fmobile-callback`,
+    )
   })
 })
