@@ -159,6 +159,11 @@ export const handleAuth = async (request: Request, env: Env, url: URL): Promise<
     const provider = findProvider("github")
     if (!provider || provider.kind !== "oauth") return errorResponse(404, "NotFound", "github is not a provider")
     const returnTo = safeReturnPath(url.searchParams.get("return"), "/")
+    // Local stacks usually have no GitHub OAuth app. With DEV_SESSION_LOGIN set, the normal sign-in button signs in as
+    // the dev user instead of answering NotConfigured.
+    if (oauthCredentials(env, provider) === null && env.DEV_SESSION_LOGIN) {
+      return redirect(`/auth/dev-login?return=${encodeURIComponent(returnTo)}`)
+    }
     return beginOAuth(env, url, "login", provider, returnTo)
   }
 
