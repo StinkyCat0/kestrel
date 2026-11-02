@@ -159,6 +159,11 @@ export const handleAuth = async (request: Request, env: Env, url: URL): Promise<
     const provider = findProvider("github")
     if (!provider || provider.kind !== "oauth") return errorResponse(404, "NotFound", "github is not a provider")
     const returnTo = safeReturnPath(url.searchParams.get("return"), "/")
+    // Local stacks usually have no GitHub OAuth app. With DEV_SESSION_LOGIN set, the normal sign-in button signs in as
+    // the dev user instead of answering NotConfigured.
+    if (oauthCredentials(env, provider) === null && env.DEV_SESSION_LOGIN) {
+      return redirect(`/auth/dev-login?return=${encodeURIComponent(returnTo)}`)
+    }
     return beginOAuth(env, url, "login", provider, returnTo)
   }
 
@@ -199,7 +204,9 @@ export const handleAuth = async (request: Request, env: Env, url: URL): Promise<
     await stub.upsertUser({ login, name: login, avatarUrl: "" })
     const sessionId = randomToken(32)
     await stub.createSession(sessionId, login, Date.now() + SESSION_TTL_MS, true)
-    return redirect("/", { "set-cookie": sessionCookie(sessionId, SESSION_TTL_MS / 1000) })
+    return redirect(safeReturnPath(url.searchParams.get("return"), "/"), {
+      "set-cookie": sessionCookie(sessionId, SESSION_TTL_MS / 1000),
+    })
   }
 
   return errorResponse(404, "NotFound", `no route for ${path}`)

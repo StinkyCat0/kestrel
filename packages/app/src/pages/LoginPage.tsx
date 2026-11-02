@@ -26,9 +26,17 @@ export function LoginPage() {
       <p className="max-w-md text-muted-foreground">
         Run your own agent harness in a sandboxed cloud box with a live desktop.
       </p>
-      <Button asChild size="lg">
-        <a href={loginUrl}>Sign in with GitHub</a>
-      </Button>
+      <div className="flex flex-col items-center gap-3">
+        <Button asChild size="lg">
+          <a href={loginUrl}>Sign in with GitHub</a>
+        </Button>
+        {/* Local stacks run with DEV_SESSION_LOGIN and usually no GitHub OAuth app; GitHub sign-in answers NotConfigured. */}
+        {import.meta.env.DEV && (
+          <Button asChild variant="soft" size="sm">
+            <a href={`${SERVER_URL}/auth/dev-login?return=${encodeURIComponent(returnPath)}`}>Dev sign in</a>
+          </Button>
+        )}
+      </div>
     </div>
   )
 }
