@@ -35,6 +35,6 @@ linux:
   category: Development
   maintainer: Kestrel <noreply@kestrel-agent.com>
   syncDesktopName: true
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: ${productName}-linux-${arch}.${ext}
 
 npmRebuild: false
