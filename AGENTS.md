@@ -101,6 +101,7 @@ need screenshots in the PR:** push them to an orphan branch `<github-login>/<top
 | `packages/control` | Cloudflare Worker: GitHub OAuth, sessions, control API, relay to the box | `src/hub.ts` is the single Durable Object. Serves `packages/app/dist` as assets. |
 | `packages/server` | The agent box: harness, bwrap sandbox, MCP, broker, desktop | Effect services wired in `src/main.ts`. Agent tools in `src/mcp/handler.ts`; harness command in `src/config.ts`. |
 | `packages/protocol` | Effect Schema types shared by everything | Relay frames (`relay.ts`), control API (`control.ts`), domain + REST (`index.ts`). |
+| `packages/desktop` | Electron desktop app | Bundles `packages/app/dist`; a loopback proxy adds the session cookie; signs in through `/auth/desktop-callback` and updates from the `desktop-latest` GitHub release. See its README before changing packaging or auth. |
 | `docs/architecture.md` | Diagram and who owns what | Read it before touching an area you don't own. |
 
 ## Conventions
