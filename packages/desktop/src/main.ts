@@ -185,6 +185,18 @@ const start = async (): Promise<void> => {
     getSession: () => store?.get() ?? Promise.resolve(null),
     clearSession: () => store?.clear() ?? Promise.resolve(),
   })
+  // `bun run dev:desktop` seeds a session from the local dev stack. Only a loopback HTTP control can use it.
+  const devSession = process.env.KESTREL_DESKTOP_DEV_SESSION
+  const control = new URL(CONTROL_URL)
+  if (
+    devSession !== undefined &&
+    devSession !== "" &&
+    control.protocol === "http:" &&
+    (control.hostname === "127.0.0.1" || control.hostname === "localhost")
+  ) {
+    await store.set(devSession)
+    server.setSession(devSession)
+  }
   await createWindow()
   installMenu()
   wireUpdates()

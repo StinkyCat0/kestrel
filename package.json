@@ -16,7 +16,7 @@
     "dev:mobile": "bun run --filter @cloudagents/mobile start",
     "build:desktop": "bun run --filter @cloudagents/desktop build",
     "dist:desktop": "bun run --filter @cloudagents/desktop dist",
-    "dev:desktop": "bun run --filter @cloudagents/desktop dev"
+    "dev:desktop": "bun scripts/dev-desktop.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
