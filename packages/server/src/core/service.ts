@@ -1211,8 +1211,19 @@ export const CoreLive = Layer.effect(
             const running = s.runs.find((r) => r.taskId === taskId && r.status === "running")
             if (running) {
               // Mid-run: the text joins the running run. If that run's call is still waiting on the question, it is
-              // the answer; otherwise it steers the run's live turn, or waits in the run's inbox for task_inbox.
-              const message: Message = { id: deliveryId ?? newId(), taskId, role: "user", text, runId: running.id, createdAt: now, ...attached, ...sent }
+              // the answer; otherwise it steers the run's live turn, or waits in the run's inbox for task_inbox. Either
+              // way it reads where the run's transcript is now.
+              const message: Message = {
+                id: deliveryId ?? newId(),
+                taskId,
+                role: "user",
+                text,
+                runId: running.id,
+                createdAt: now,
+                afterItems: harness.itemCount(running.id),
+                ...attached,
+                ...sent,
+              }
               const answer = ask?.runId === running.id ? (liveAsks.get(running.id) ?? null) : null
               if (answer) {
                 liveAsks.delete(running.id)
@@ -1282,17 +1293,35 @@ export const CoreLive = Layer.effect(
         )
         if (reserved.duplicate) return { message: reserved.message, run: reserved.run }
         hub.publish({ _tag: "task.updated", task: reserved.task })
-        publishMessage(reserved.message)
-        if (reserved.answer) yield* Deferred.succeed(reserved.answer, { _tag: "answered", text: reserved.delivered })
         if (reserved.start === null) {
-          if (reserved.answer === null) {
+          // Mid-run. The run kept emitting items while the message was stored, so its position is taken again in the
+          // step that hands it to the agent: items emitted before that reached the agent before the message did. A run
+          // that ended meanwhile counts 0 items, so the count taken when the message was stored is the floor.
+          let afterItems = reserved.message.afterItems ?? 0
+          if (reserved.answer) {
+            afterItems = Math.max(afterItems, harness.itemCount(reserved.run.id))
+            yield* Deferred.succeed(reserved.answer, { _tag: "answered", text: reserved.delivered })
+          } else {
             // Taken from the inbox before the steer is sent, so task_inbox cannot hand it over a second time.
             const seen = seenFor(reserved.run.id)
             seen.add(reserved.message.id)
-            if (!(yield* harness.steer(reserved.run.id, reserved.delivered))) seen.delete(reserved.message.id)
+            const steered = yield* harness.steer(reserved.run.id, reserved.delivered)
+            if (!steered.accepted) seen.delete(reserved.message.id)
+            afterItems = Math.max(afterItems, steered.afterItems)
           }
-          return { message: reserved.message, run: reserved.run }
+          const message =
+            afterItems === reserved.message.afterItems
+              ? reserved.message
+              : yield* store.update((s) => {
+                  const stored = s.messages.find((m) => m.id === reserved.message.id)
+                  if (stored) stored.afterItems = afterItems
+                  return Either.right({ ...reserved.message, afterItems })
+                })
+          // Published once its position is final, so the thread never shows it in the wrong place.
+          publishMessage(message)
+          return { message, run: reserved.run }
         }
+        publishMessage(reserved.message)
         hub.publish({ _tag: "run.updated", run: reserved.run })
 
         const taskNow = yield* requireTask(taskId)
