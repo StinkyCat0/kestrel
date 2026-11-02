@@ -1,4 +1,4 @@
-name: Desktop release (Linux)
+name: Desktop release
 
 on:
   push:
@@ -15,7 +15,11 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,14 +41,19 @@ jobs:
             exit 1
           fi
 
-      - name: Build the .deb
+      - name: Build the installers
         run: bun run --filter @cloudagents/desktop dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: desktop-linux
+          name: desktop-${{ matrix.os }}
           path: |
             packages/desktop/release/*.deb
+            packages/desktop/release/*.dmg
+            packages/desktop/release/*.zip
+            packages/desktop/release/*.exe
             packages/desktop/release/*.blockmap
             packages/desktop/release/*.yml
           if-no-files-found: error

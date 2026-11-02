@@ -28,7 +28,6 @@ publish:
   provider: generic
   url: https://github.com/jarenm1/kestrel/releases/download/desktop-latest/
 
-# First step: Linux. macOS and Windows get their own packaging PRs and signing setup.
 linux:
   target:
     - deb
@@ -36,5 +35,26 @@ linux:
   maintainer: Kestrel <noreply@kestrel-agent.com>
   syncDesktopName: true
   artifactName: ${productName}-linux-${arch}.${ext}
+
+# Unsigned builds for now; add Developer ID notarization and a Windows certificate before calling these production.
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  category: public.app-category.developer-tools
+  identity: null
+  artifactName: ${productName}-macos-${arch}.${ext}
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-windows-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
 
 npmRebuild: false
