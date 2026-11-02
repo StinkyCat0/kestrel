@@ -3,10 +3,12 @@ import { Linking, StyleSheet, Text, View, useWindowDimensions } from "react-nati
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { AppWindow, GitCompare, GitPullRequest, type LucideIcon, Monitor, PanelRightClose } from "lucide-react-native";
+import { ThreadBoxIndicator } from "@/components/BoxStatus";
 import { ChatPanel } from "@/components/ChatPanel";
 import { DesktopViewer } from "@/components/DesktopViewer";
 import { DiffView } from "@/components/DiffView";
 import { PreviewViewer } from "@/components/PreviewViewer";
+import { ThreadLinks } from "@/components/ThreadLinks";
 import { ContentPanel, TopBar } from "@/components/TopBar";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
@@ -99,22 +101,15 @@ export function TaskScreen({ taskId, bottomInset }: Props) {
   // Archived threads keep their history; their desktop was torn down, so it does not start again.
   const archivedTask = state.task?.archivedAt ? state.task : undefined;
 
-  // The web's collapsed panel rail: one button per tab, and the pull request links.
+  // The web's collapsed panel rail: one button per tab, then the thread's pull requests and GitHub repositories. Those
+  // share one button once there are several, so the bar fits a narrow phone whatever the thread checked out. The top
+  // bar stays above the open panel, so the links stay reachable while it is open.
   const rail = (
     <>
       {PANEL_TABS.map((t) => (
         <Button key={t.id} variant="ghost" size="icon" icon={t.icon} accessibilityLabel={t.label} onPress={() => openTab(t.id)} />
       ))}
-      {pullRequests.map((pr) => (
-        <Button
-          key={pr.id}
-          variant="ghost"
-          size="icon"
-          icon={GitPullRequest}
-          accessibilityLabel={pr.label}
-          onPress={() => void Linking.openURL(pr.url)}
-        />
-      ))}
+      <ThreadLinks pullRequests={pullRequests} checkouts={checkouts} />
     </>
   );
 
@@ -124,6 +119,7 @@ export function TaskScreen({ taskId, bottomInset }: Props) {
       <ContentPanel bottomInset={bottomInset}>
         <GestureDetector gesture={openPan}>
           <View style={styles.flex}>
+            <ThreadBoxIndicator />
             {state.error ? <Alert style={styles.error}>{state.error}</Alert> : null}
             <ChatPanel
               taskId={taskId}
