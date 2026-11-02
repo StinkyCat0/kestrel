@@ -199,7 +199,9 @@ export const handleAuth = async (request: Request, env: Env, url: URL): Promise<
     await stub.upsertUser({ login, name: login, avatarUrl: "" })
     const sessionId = randomToken(32)
     await stub.createSession(sessionId, login, Date.now() + SESSION_TTL_MS, true)
-    return redirect("/", { "set-cookie": sessionCookie(sessionId, SESSION_TTL_MS / 1000) })
+    return redirect(safeReturnPath(url.searchParams.get("return"), "/"), {
+      "set-cookie": sessionCookie(sessionId, SESSION_TTL_MS / 1000),
+    })
   }
 
   return errorResponse(404, "NotFound", `no route for ${path}`)
