@@ -199,7 +199,8 @@ export const handleAuth = async (request: Request, env: Env, url: URL): Promise<
 
   // Dev-only sign-in: exists only when DEV_SESSION_LOGIN is set. Never set it in production.
   if (path === "/auth/dev-login" && env.DEV_SESSION_LOGIN && request.method === "GET") {
-    const login = env.DEV_SESSION_LOGIN
+    // `?login=` lets a local stack exercise more than one account; production never has DEV_SESSION_LOGIN.
+    const login = url.searchParams.get("login")?.trim() || env.DEV_SESSION_LOGIN
     const stub = hub(env)
     await stub.upsertUser({ login, name: login, avatarUrl: "" })
     const sessionId = randomToken(32)
