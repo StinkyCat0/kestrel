@@ -48,6 +48,11 @@ createInterface({ input: process.stdin })
     agentCommands: {
       anthropic: [process.execPath, cli].map((path) => `'${path.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`).join(" "),
       openai: "",
+      openrouter: "",
+      zai: "",
+      deepseek: "",
+      minimax: "",
+      moonshot: "",
     },
     fakeAgent: false,
     fakeAgentRoBinds: [],

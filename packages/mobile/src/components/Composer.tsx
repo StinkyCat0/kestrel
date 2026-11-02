@@ -11,6 +11,7 @@ import {
   connectedModelProviders,
   harnessCommandPrefix,
   Paths,
+  providerHarness,
   type ContextUsage,
   type HarnessCommand,
   type Message,
@@ -301,7 +302,8 @@ export function Composer({
   const triggerAllowed =
     trigger === "/" ||
     (trigger === "$" &&
-      (expectedProvider === "openai" || (activeRunId !== undefined && activeRunProvider === undefined)));
+      ((expectedProvider !== undefined && providerHarness(expectedProvider) === "codex") ||
+        (activeRunId !== undefined && activeRunProvider === undefined)));
   const slashQuery =
     taskId !== undefined && trigger !== undefined && triggerAllowed && (firstSpace === -1 || text.length <= firstSpace)
       ? text.slice(1)
@@ -315,7 +317,7 @@ export function Composer({
   const commandProvider = commandQuery.data?.provider ?? expectedProvider;
   const slashMenuOpen =
     slashQuery !== undefined &&
-    (trigger !== "$" || commandProvider === "openai") &&
+    (trigger !== "$" || (commandProvider !== undefined && providerHarness(commandProvider) === "codex")) &&
     focused;
 
   // Codex lists its commands and skills on `/`, and only its skills on their native `$`.

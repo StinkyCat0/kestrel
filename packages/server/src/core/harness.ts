@@ -8,7 +8,9 @@ import {
   InternalError,
   RunItems,
   DEFAULT_MODEL_PROVIDER,
+  defaultModelOf,
   modelInfo,
+  providerHarness,
   type AgentEffort,
   type AgentItem,
   type AgentModel,
@@ -93,6 +95,8 @@ interface ActiveRun {
   readonly child: ChildProcess
   readonly log: WriteStream
   readonly taskId: string
+  /** The model provider that minted this run's session, so a Claude stream is attributed to the right one. */
+  readonly provider: ModelProvider
   readonly stdoutLines: string[]
   readonly stderrLines: string[]
   /** Display items in insertion order; a replacement keeps its original position. */
@@ -120,6 +124,7 @@ type RunConversation =
 /** What a run starts from besides its process: the session's last context use, and its conversation if it has one. */
 interface RunSession {
   readonly seed: ContextUsage | null
+  readonly provider: ModelProvider
   readonly conversation: RunConversation | null
   /** The queue item the run showed while it waited for a slot; it seeds the run's items. Null when it got one at once. */
   readonly queued: AgentItem | null
@@ -429,7 +434,7 @@ export const AgentHarnessLive = Layer.effect(
             entry.context = context
             runFork(setContext(entry.taskId, context))
           }
-          const session = sessionOf(parsed)
+          const session = sessionOf(parsed, entry.provider)
           if (session !== null) {
             entry.sessionId = session.sessionId
             runFork(recordSession(runId, session.sessionId, session.provider))
@@ -472,6 +477,7 @@ export const AgentHarnessLive = Layer.effect(
               child,
               log,
               taskId: task.id,
+              provider: session.provider,
               stdoutLines: [],
               stderrLines: [],
               items: new Map<string, AgentItem>(session.queued ? [[session.queued.id, session.queued]] : []),
@@ -511,7 +517,7 @@ export const AgentHarnessLive = Layer.effect(
                   send,
                   onThread: (threadId) => {
                     entry.sessionId = threadId
-                    runFork(recordSession(run.id, threadId, "openai"))
+                    runFork(recordSession(run.id, threadId, entry.provider))
                   },
                   onDone,
                 },
@@ -592,6 +598,7 @@ export const AgentHarnessLive = Layer.effect(
       spawn: (task, run, prompt, display, user, resumeSession, choice) => {
         const launch = (admission: Admission) => Effect.gen(function* () {
           const provider = choice.model === undefined ? DEFAULT_MODEL_PROVIDER : modelInfo(choice.model).provider
+          const harness = providerHarness(provider)
           const homeDir = join(config.homesDir, task.id)
           const mcpUrl = `${config.mcpBaseUrl}/mcp/${task.id}`
           const mcpConfigHost = join(homeDir, ".cloudagents", "mcp.json")
@@ -602,7 +609,7 @@ export const AgentHarnessLive = Layer.effect(
 
           const started = yield* Effect.gen(function* () {
             // The run's token authorizes its MCP session as well as its model calls.
-            const lease = yield* broker.issue(run.id, user)
+            const lease = yield* broker.issue(run.id, user, provider)
             yield* Effect.tryPromise({
               try: async () => {
                 await mkdir(join(homeDir, ".cloudagents"), { recursive: true })
@@ -621,8 +628,13 @@ export const AgentHarnessLive = Layer.effect(
               catch: (e) => new InternalError({ message: `cannot prepare run dir: ${String(e)}` }),
             })
 
-            // A user's own CLI logins replace the broker's API keys for that provider.
-            const logins = yield* cliAuth.loggedInDirs(user).pipe(Effect.mapError((e) => new InternalError({ message: e.message })))
+            // A user's own subscription login replaces the broker's key only for the vendor it belongs to. A key for
+            // OpenRouter, Z.ai, DeepSeek, MiniMax or Kimi is never replaced by a Claude/ChatGPT login.
+            const logins = (yield* cliAuth.loggedInDirs(user).pipe(Effect.mapError((e) => new InternalError({ message: e.message })))).filter(
+              (login) =>
+                (login.provider === "claude-cli" && provider === "anthropic") ||
+                (login.provider === "codex-cli" && provider === "openai"),
+            )
             const loginDirs = logins.map((login) => ({
               provider: login.provider,
               host: login.dir,
@@ -632,6 +644,23 @@ export const AgentHarnessLive = Layer.effect(
             const dropped = new Set(logins.flatMap((login) => LOGIN_ENV[login.provider].broker))
             const keptBroker = Object.fromEntries(Object.entries(lease.env).filter(([key]) => !dropped.has(key)))
             const loginEnv = Object.fromEntries(loginDirs.map((d) => [LOGIN_ENV[d.provider].env, d.inside]))
+            // Claude Code picks its helper models (summaries, sub-agents) by name unless every tier is pinned, and a
+            // gateway only knows its own ids. A third-party provider's default model fills every tier for that run.
+            const providerModel =
+              choice.model ??
+              (harness === "claude" && provider !== "anthropic" ? defaultModelOf(provider)?.id : undefined)
+            const providerModelEnv: Record<string, string> =
+              harness === "claude" && provider !== "anthropic" && providerModel !== undefined
+                ? {
+                    CLOUDAGENTS_MODEL: providerModel,
+                    ANTHROPIC_MODEL: providerModel,
+                    ANTHROPIC_DEFAULT_FABLE_MODEL: providerModel,
+                    ANTHROPIC_DEFAULT_OPUS_MODEL: providerModel,
+                    ANTHROPIC_DEFAULT_SONNET_MODEL: providerModel,
+                    ANTHROPIC_DEFAULT_HAIKU_MODEL: providerModel,
+                    CLAUDE_CODE_SUBAGENT_MODEL: providerModel,
+                  }
+                : {}
             const launch = yield* prepareLaunch({
               settings,
               taskId: task.id,
@@ -658,6 +687,7 @@ export const AgentHarnessLive = Layer.effect(
                 ...(resumeSession === null ? {} : { CLOUDAGENTS_RESUME_SESSION: resumeSession }),
                 ...keptBroker,
                 ...loginEnv,
+                ...providerModelEnv,
               },
               command: config.agentCommands[provider],
               roBinds: config.fakeAgentRoBinds,
@@ -681,9 +711,10 @@ export const AgentHarnessLive = Layer.effect(
               { file: launch.file, args: launch.args, cwd: launch.cwd, env: { ...launch.env } },
               {
                 seed: resumeSession === null ? null : (task.context ?? null),
+                provider,
                 queued: admission.queued,
                 conversation:
-                  provider === "openai"
+                  harness === "codex"
                     ? {
                         kind: "codex",
                         input: {
@@ -744,7 +775,12 @@ export const AgentHarnessLive = Layer.effect(
               cwd: serverDir,
               env: { ...process.env },
             },
-            { seed: null, conversation: null, queued: null },
+            {
+              seed: null,
+              provider: run.provider ?? DEFAULT_MODEL_PROVIDER,
+              conversation: null,
+              queued: null,
+            },
           ).pipe(Effect.either)
           if (Either.isLeft(started)) {
             yield* shape.abort(run.id, started.left.message)
@@ -810,10 +846,13 @@ export const AgentHarnessLive = Layer.effect(
  * The agent session a JSON output line names, and the provider that minted it, or null. Claude Code's stream-json
  * opens with `{"type":"system","subtype":"init","session_id":…}`. A Codex run's thread comes from its driver.
  */
-const sessionOf = (event: unknown): { readonly sessionId: string; readonly provider: ModelProvider } | null => {
+const sessionOf = (
+  event: unknown,
+  provider: ModelProvider,
+): { readonly sessionId: string; readonly provider: ModelProvider } | null => {
   if (typeof event !== "object" || event === null || !("type" in event)) return null
   if (event.type === "system" && "subtype" in event && event.subtype === "init" && "session_id" in event) {
-    return typeof event.session_id === "string" ? { sessionId: event.session_id, provider: "anthropic" } : null
+    return typeof event.session_id === "string" ? { sessionId: event.session_id, provider } : null
   }
   return null
 }

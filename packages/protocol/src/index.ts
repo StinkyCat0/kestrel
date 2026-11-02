@@ -5,7 +5,7 @@
  * Pure Effect Schema: no Node/DOM-specific imports here.
  */
 import { Schema } from "effect"
-import { AgentEffort, AgentModel, ModelProvider, modelInfo } from "./models"
+import { AgentEffort, AgentModel, ModelProvider, modelInfo, providerHarness } from "./models"
 import { BranchName, RepoRef } from "./refs"
 
 // ---------------------------------------------------------------------------
@@ -496,7 +496,7 @@ export type HarnessCommand = typeof HarnessCommand.Type
 
 /** How `command` is typed in the composer: its own prefix, or the provider's default from boxes that send none. */
 export const harnessCommandPrefix = (command: HarnessCommand, provider: ModelProvider | undefined): "/" | "$" =>
-  command.prefix ?? (provider === "openai" ? "$" : "/")
+  command.prefix ?? (provider === undefined || providerHarness(provider) === "claude" ? "/" : "$")
 
 /**
  * The commands of the harness the thread's next message will run on. `provider` is authoritative: while a run is

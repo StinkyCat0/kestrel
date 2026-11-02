@@ -21,6 +21,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   connectedModelProviders,
   harnessCommandPrefix,
+  providerHarness,
   type ContextUsage,
   type HarnessCommand,
   type Message,
@@ -424,7 +425,8 @@ export function Composer({
   const triggerAllowed =
     trigger === "/" ||
     (trigger === "$" &&
-      (expectedProvider === "openai" || (activeRunId !== undefined && activeRunProvider === undefined)))
+      ((expectedProvider !== undefined && providerHarness(expectedProvider) === "codex") ||
+        (activeRunId !== undefined && activeRunProvider === undefined)))
   // A new thread has no harness to ask, so only Kestrel's own `/` commands list there.
   const slashQuery =
     (taskId !== undefined || trigger === "/") &&
@@ -456,7 +458,7 @@ export function Composer({
   // On a new thread nothing but those commands can match, and any other `/text` is an ordinary first message to send.
   const slashMenuOpen =
     slashQuery !== undefined &&
-    (trigger !== "$" || commandProvider === "openai") &&
+    (trigger !== "$" || (commandProvider !== undefined && providerHarness(commandProvider) === "codex")) &&
     (taskId !== undefined || commandMatches.length > 0) &&
     composerFocused &&
     !autocompleteDismissed

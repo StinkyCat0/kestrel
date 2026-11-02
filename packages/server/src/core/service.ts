@@ -36,6 +36,7 @@ import {
   type HarnessCommands,
   modelInfo,
   type FileRoot,
+  providerHarness,
   providerModels,
 } from "@cloudagents/protocol"
 import { CliAuth } from "../cliauth"
@@ -1775,7 +1776,7 @@ export const CoreLive = Layer.effect(
           const running = state.runs.find((r) => r.taskId === taskId && r.status === "running")
           const session = running === undefined ? undefined : state.runSessions.find((s) => s.runId === running.id)
           const provider = commandProvider(running, session, model)
-          const cliProvider: CliProvider = provider === "anthropic" ? "claude-cli" : "codex-cli"
+          const cliProvider: CliProvider = providerHarness(provider) === "codex" ? "codex-cli" : "claude-cli"
           const commands = yield* cliAuth.discoverCommands(user, cliProvider, threadDirOf(task.id))
           return { provider, commands }
         }),

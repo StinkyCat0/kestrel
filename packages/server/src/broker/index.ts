@@ -1,15 +1,54 @@
 import { Context, Effect, Layer } from "effect"
 import { randomBytes, timingSafeEqual } from "node:crypto"
+import { MODEL_PROVIDERS, type ModelProvider, type RelayCredentials } from "@cloudagents/protocol"
 import { Config } from "../config"
 import { CredentialStore } from "../credentials"
 
-export type BrokerProvider = "anthropic" | "openai"
+export type BrokerProvider = ModelProvider
 
-export const BROKER_PROVIDERS: ReadonlyArray<BrokerProvider> = ["anthropic", "openai"]
+export const BROKER_PROVIDERS: ReadonlyArray<BrokerProvider> = MODEL_PROVIDERS.map((p) => p.id)
 
+/** Where each provider's broker path forwards. Anthropic-compatible providers receive Claude Code's `/v1/messages`. */
 export const UPSTREAM_BASE: Record<BrokerProvider, string> = {
   anthropic: "https://api.anthropic.com",
   openai: "https://api.openai.com",
+  openrouter: "https://openrouter.ai/api",
+  zai: "https://api.z.ai/api/anthropic",
+  deepseek: "https://api.deepseek.com/anthropic",
+  minimax: "https://api.minimax.io/anthropic",
+  moonshot: "https://api.moonshot.ai/anthropic",
+}
+
+/**
+ * The env that points a run's CLI at the broker for `provider`.
+ *
+ * Anthropic and OpenAI keep their own credential env. Every other provider speaks the Anthropic Messages API to
+ * Claude Code, which reads a gateway key from `ANTHROPIC_AUTH_TOKEN`; `ANTHROPIC_API_KEY` must be empty or Claude
+ * Code prefers it and sends `x-api-key` to the gateway.
+ */
+export const brokerEnv = (provider: BrokerProvider, base: string, token: string): Record<string, string> => {
+  switch (provider) {
+    case "anthropic":
+      return { ANTHROPIC_BASE_URL: `${base}/anthropic`, ANTHROPIC_API_KEY: token }
+    case "openai":
+      // Codex appends `/responses` to its base URL, so the broker's OpenAI base carries the `/v1` segment.
+      return { OPENAI_BASE_URL: `${base}/openai/v1`, OPENAI_API_KEY: token }
+    default:
+      return {
+        ANTHROPIC_BASE_URL: `${base}/${provider}`,
+        ANTHROPIC_AUTH_TOKEN: token,
+        ANTHROPIC_API_KEY: "",
+      }
+  }
+}
+
+/** The real key for `provider`, preferring the provider map and falling back to the legacy flat slots. */
+export const credentialFor = (creds: RelayCredentials | null, provider: BrokerProvider): string | null => {
+  const key = creds?.providers?.[provider]
+  if (key !== undefined && key !== "") return key
+  if (provider === "anthropic") return creds?.anthropic ?? null
+  if (provider === "openai") return creds?.openai ?? null
+  return null
 }
 
 /** A live broker token: the run it was minted for and the user who started that run. */
@@ -25,8 +64,8 @@ export interface BrokerLease {
 }
 
 export interface CredentialBrokerShape {
-  /** Mints a per-run token. */
-  readonly issue: (runId: string, user: string) => Effect.Effect<BrokerLease>
+  /** Mints a per-run token, with env pointing the run's CLI at `provider`. */
+  readonly issue: (runId: string, user: string, provider: BrokerProvider) => Effect.Effect<BrokerLease>
   /** Invalidates the run's token and notifies revoke listeners. Idempotent. */
   readonly revoke: (runId: string) => Effect.Effect<void>
   /** Grant for a live token; null when unknown or revoked. */
@@ -71,24 +110,14 @@ export const CredentialBrokerLive = Layer.effect(
     }
 
     const broker: CredentialBrokerShape = {
-      issue: (runId, user) =>
+      issue: (runId, user, provider) =>
         Effect.sync(() => {
           revokeSync(runId)
           const token = randomBytes(24).toString("base64url")
           grantByToken.set(token, { runId, user })
           tokenByRun.set(runId, token)
           const base = `http://127.0.0.1:${config.port}/broker/${token}`
-          return {
-            token,
-            env: {
-              ANTHROPIC_BASE_URL: `${base}/anthropic`,
-              ANTHROPIC_API_KEY: token,
-              // Codex appends `/responses` to its base URL, so the broker's OpenAI base carries the `/v1` segment.
-              OPENAI_BASE_URL: `${base}/openai/v1`,
-              // A Codex run hands the token to app-server with `account/login/start`; app-server reads no key env.
-              OPENAI_API_KEY: token,
-            },
-          }
+          return { token, env: brokerEnv(provider, base, token) }
         }),
       revoke: (runId) => Effect.sync(() => revokeSync(runId)),
       grantForToken: (token) => Effect.sync(() => grantFor(token)),
@@ -101,7 +130,7 @@ export const CredentialBrokerLive = Layer.effect(
       upstreamKey: (provider, user) =>
         Effect.gen(function* () {
           const creds = yield* store.get(user)
-          return creds?.[provider] || null
+          return credentialFor(creds, provider)
         }),
     }
     return broker

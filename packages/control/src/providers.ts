@@ -94,6 +94,11 @@ export const PROVIDERS: readonly Provider[] = [
   },
   { id: "anthropic", label: "Anthropic", kind: "apikey" },
   { id: "openai", label: "OpenAI", kind: "apikey" },
+  { id: "openrouter", label: "OpenRouter", kind: "apikey" },
+  { id: "zai", label: "Z.ai", kind: "apikey" },
+  { id: "deepseek", label: "DeepSeek", kind: "apikey" },
+  { id: "minimax", label: "MiniMax", kind: "apikey" },
+  { id: "moonshot", label: "Kimi (Moonshot AI)", kind: "apikey" },
   { id: "claude-cli", label: "Claude subscription", kind: "cli" },
   { id: "codex-cli", label: "ChatGPT subscription", kind: "cli" },
 ]
