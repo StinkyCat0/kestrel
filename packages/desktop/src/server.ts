@@ -4,7 +4,7 @@ import { stat } from "node:fs/promises"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { extname, join, resolve, sep } from "node:path"
 import { createProxyServer } from "http-proxy"
-import { loginUrl, safeLocalPath } from "./auth"
+import { loginUrl, safeLocalPath, type CallbackPath } from "./auth"
 
 /** Paths the app uses against the control plane; everything else is a static asset. */
 const PROXY_PREFIXES = ["/api", "/auth", "/_preview", "/box"]
@@ -31,6 +31,8 @@ export interface DesktopServerOptions {
   /** `packages/app/dist` */
   readonly appDist: string
   readonly controlUrl: string
+  /** Which control-plane route completes sign-in; see `callbackPath` in `auth.ts`. */
+  readonly callbackPath: CallbackPath
   readonly getSession: () => Promise<string | null>
   readonly clearSession: () => Promise<void>
 }
@@ -127,7 +129,10 @@ export const startDesktopServer = async (options: DesktopServerOptions): Promise
 
       if (url.pathname === "/auth/github/login") {
         pendingReturn = safeLocalPath(url.searchParams.get("return"))
-        res.writeHead(302, { location: loginUrl(options.controlUrl), "cache-control": "no-store" })
+        res.writeHead(302, {
+          location: loginUrl(options.controlUrl, options.callbackPath),
+          "cache-control": "no-store",
+        })
         res.end()
         return
       }

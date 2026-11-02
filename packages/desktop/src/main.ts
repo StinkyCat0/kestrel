@@ -1,7 +1,7 @@
 import { BrowserWindow, Menu, app, dialog, shell, type MenuItemConstructorOptions } from "electron"
 import { autoUpdater } from "electron-updater"
 import { join, resolve } from "node:path"
-import { CALLBACK_SCHEME, loginUrl, parseCallback, safeLocalPath } from "./auth"
+import { CALLBACK_SCHEME, callbackPath, loginUrl, parseCallback, safeLocalPath, type CallbackPath } from "./auth"
 import { startDesktopServer, type DesktopServer } from "./server"
 import { SessionStore } from "./session"
 
@@ -13,15 +13,18 @@ let server: DesktopServer | null = null
 let store: SessionStore | null = null
 let updateTimer: NodeJS.Timeout | null = null
 let pendingCallback: string | null = null
+let loginReturnPath: CallbackPath = "/auth/desktop-callback"
 
 const appDist = (): string =>
   app.isPackaged ? join(process.resourcesPath, "app-dist") : join(app.getAppPath(), "..", "app", "dist")
 
-const registerProtocol = (): void => {
+const registerProtocol = (mobileFallback: boolean): void => {
   if (process.defaultApp && process.argv[1] !== undefined) {
     app.setAsDefaultProtocolClient(CALLBACK_SCHEME, process.execPath, [resolve(process.argv[1])])
+    if (mobileFallback) app.setAsDefaultProtocolClient("kestrel", process.execPath, [resolve(process.argv[1])])
   } else {
     app.setAsDefaultProtocolClient(CALLBACK_SCHEME)
+    if (mobileFallback) app.setAsDefaultProtocolClient("kestrel")
   }
 }
 
@@ -41,7 +44,7 @@ const wireNavigation = (contents: BrowserWindow["webContents"]): void => {
       if (target.pathname === "/auth/github/login") {
         event.preventDefault()
         server?.setPendingReturn(safeLocalPath(target.searchParams.get("return")))
-        void shell.openExternal(loginUrl(CONTROL_URL))
+        void shell.openExternal(loginUrl(CONTROL_URL, loginReturnPath))
       }
       return
     }
@@ -172,11 +175,13 @@ const wireUpdates = (): void => {
 }
 
 const start = async (): Promise<void> => {
-  registerProtocol()
+  loginReturnPath = await callbackPath(CONTROL_URL)
+  registerProtocol(loginReturnPath === "/auth/mobile-callback")
   store = new SessionStore()
   server = await startDesktopServer({
     appDist: appDist(),
     controlUrl: CONTROL_URL,
+    callbackPath: loginReturnPath,
     getSession: () => store?.get() ?? Promise.resolve(null),
     clearSession: () => store?.clear() ?? Promise.resolve(),
   })
@@ -196,7 +201,7 @@ const start = async (): Promise<void> => {
 }
 
 const protocolUrl = (argv: readonly string[]): string | undefined =>
-  argv.find((arg) => arg.startsWith(`${CALLBACK_SCHEME}://`))
+  argv.find((arg) => arg.startsWith(`${CALLBACK_SCHEME}://`) || arg.startsWith("kestrel://"))
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
