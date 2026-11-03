@@ -32,6 +32,8 @@ import {
   type CreatedFleetBox,
   type FleetBox,
   type FleetBoxList,
+  type ToolFailureList,
+  type ToolFailureReport,
   type PairingPoll,
   type PairingStart,
   type PairingStartBody,
@@ -65,6 +67,7 @@ import {
   listFleetBoxes,
   managedBoxAccess,
   managedBoxFor,
+  managedBoxSecretValid,
   rotateFleetBoxSecret,
   updateFleetBox,
   type ManagedBoxRow,
@@ -81,6 +84,7 @@ import {
   storeMeterRecords,
 } from "./meter-table"
 import { reconcileMeter } from "./meter-reconcile"
+import { commonToolFailures, ensureToolFailuresTable, recordToolFailures } from "./tool-failures-table"
 
 /** A failed box call: the HTTP status and error body the Worker answers with. */
 export type BoxFailure = { ok: false; status: number; tag: string; message: string }
@@ -269,6 +273,7 @@ export class Hub extends DurableObject<Env> {
       }
       ensureFleetTable(sql)
       ensureMeterTables(sql)
+      ensureToolFailuresTable(sql)
       sql.exec(`CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         login TEXT NOT NULL,
@@ -720,6 +725,23 @@ export class Hub extends DurableObject<Env> {
     if (!rotateFleetBoxSecret(sql, id, secret)) return null
     const box = fleetBox(sql, id)
     return box === null ? null : { box, secret }
+  }
+
+  /** Whether `secret` is the managed box's own, for calls that act for no user. */
+  async managedBoxVerify(boxId: string, secret: string): Promise<boolean> {
+    return managedBoxSecretValid(this.ctx.storage.sql, boxId, secret)
+  }
+
+  // -------------------------------------------------------------------------
+  // Tool failure counts from Kestrel's boxes; no user, thread or box is kept with them.
+  // -------------------------------------------------------------------------
+
+  recordToolFailures(report: ToolFailureReport): void {
+    recordToolFailures(this.ctx.storage.sql, report.failures, new Date())
+  }
+
+  commonToolFailures(days: number): ToolFailureList {
+    return { days, failures: commonToolFailures(this.ctx.storage.sql, days, new Date()) }
   }
 
   // -------------------------------------------------------------------------
