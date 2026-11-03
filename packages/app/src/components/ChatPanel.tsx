@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
-import type { AgentItem, ContextUsage, Message, Run, SendMessageBody, Task, TaskStatus } from "@cloudagents/protocol"
+import { threadChoiceRun, type AgentItem, type ContextUsage, type Message, type Run, type SendMessageBody, type Task, type TaskStatus } from "@cloudagents/protocol"
 import { Transcript } from "@cloudagents/ui/transcript"
 import { api } from "@/api/client"
 import { keys, queries, upsert } from "@/api/queries"
@@ -151,11 +151,13 @@ export function ChatPanel({ taskId, taskStatus, messages, runs, archivedTask, el
           <ArchivedNotice task={archivedTask} />
         ) : (
           <Composer
+            key={taskId}
             taskId={taskId}
             draftKey={taskId}
             repos={checkoutRepos}
             activeRunId={activeRun?.id}
             activeRunProvider={activeRun?.provider}
+            lastRun={threadChoiceRun(sortedRuns, messages)}
             onSend={(body, files) => send.mutateAsync({ body, files })}
             pending={send.isPending}
             ask={pendingAsk}

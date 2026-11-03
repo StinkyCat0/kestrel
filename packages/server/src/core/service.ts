@@ -1368,6 +1368,7 @@ export const CoreLive = Layer.effect(
               exitCode: null,
               provider,
               ...(choice.model === undefined ? {} : { model: choice.model }),
+              effort: choice.effort ?? null,
             }
             const message: Message = { id: messageId, taskId, role: "user", text, runId: run.id, createdAt: now, ...attached, ...sent }
             task.status = "running"

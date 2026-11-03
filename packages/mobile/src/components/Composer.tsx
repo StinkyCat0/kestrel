@@ -13,20 +13,24 @@ import Svg, { Circle } from "react-native-svg";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import {
-  AgentEffort,
   AgentModel,
   GithubRepoSlug,
   EFFORT_LABELS,
+  EffortPick,
   connectedModelProviders,
   harnessCommandPrefix,
   Paths,
+  resolveAgentChoice,
+  type AgentEffort,
   type ContextUsage,
   type HarnessCommand,
   type Message,
   type ModelInfo,
   type ModelProvider,
   type ModelProviderInfo,
+  type Run,
   type SendMessageBody,
+  type SendMessageResponse,
 } from "@cloudagents/protocol";
 import { AttachmentImage } from "@/components/AttachmentImage";
 import { createQueries } from "@/api/queries";
@@ -217,7 +221,7 @@ function ModelPicker({ sections, value, onChange, onManage }: ModelPickerProps) 
 }
 
 interface ComposerProps {
-  readonly onSend: (body: SendMessageBody) => Promise<unknown>;
+  readonly onSend: (body: SendMessageBody) => Promise<SendMessageResponse | void>;
   readonly pending: boolean;
   readonly error: unknown;
   /** Shown as a stop button while the composer is empty and a run is active. */
@@ -228,6 +232,8 @@ interface ComposerProps {
   readonly ask?: Message | undefined;
   readonly context?: ContextUsage | null | undefined;
   readonly activeRunId?: string;
+  /** The run from `threadChoiceRun`: the pickers show its choice until a different one is picked. */
+  readonly lastRun?: Pick<Run, "model" | "effort"> | undefined;
   readonly activeRunProvider?: ModelProvider;
   readonly repo?: string;
   readonly onRepoChange?: (repo: string) => void;
@@ -307,6 +313,7 @@ export function Composer({
   context,
   activeRunId,
   activeRunProvider,
+  lastRun,
   below,
   repo,
   onRepoChange,
@@ -332,23 +339,26 @@ export function Composer({
   const checkoutRepos = repos.filter((candidate) => Schema.is(GithubRepoSlug)(candidate));
   const referenceRepo = pickedRepo ?? repo ?? (checkoutRepos.length === 1 ? checkoutRepos[0] : undefined);
   useEffect(() => setPickedRepo(undefined), [repo]);
-  const [storedModel, setModel] = useStoredChoice("kestrel.model", AgentModel);
-  const [storedEffort, setEffort] = useStoredChoice("kestrel.effort", AgentEffort);
+  // A thread keeps its unsent picks to itself; the unsuffixed keys belong to the new-thread composer.
+  const pickSuffix = taskId === undefined ? "" : `.${taskId}`;
+  const [pickedModel, setPickedModel, clearPickedModel] = useStoredChoice(`kestrel.model${pickSuffix}`, AgentModel);
+  const [pickedEffort, setPickedEffort, clearPickedEffort] = useStoredChoice(`kestrel.effort${pickSuffix}`, EffortPick);
+  const [defaultModel] = useStoredChoice("kestrel.model", AgentModel);
+  const [defaultEffort] = useStoredChoice("kestrel.effort", EffortPick);
   const [choice, setChoice] = useState<{ askId: string; index: number } | undefined>();
 
   const askOptions = ask?.options ?? [];
   const chosenIndex = choice !== undefined && choice.askId === ask?.id ? choice.index : undefined;
   const chosenOption = chosenIndex === undefined ? undefined : askOptions[chosenIndex];
 
+  const connected = connections.data ? connectedModelProviders(connections.data) : [];
   const sections: readonly ModelSection[] | null = connections.data
-    ? connectedModelProviders(connections.data)
+    ? connected
         .map((provider) => ({ provider, models: shown[provider.id] }))
         .filter((section) => section.models.length > 0)
     : null;
-  // The stored pick counts only while it is on offer; otherwise the first model on offer stands in, unsaved.
   const offered = sections?.flatMap((section) => section.models) ?? [];
-  const model = offered.find((m) => m.id === storedModel) ?? offered[0];
-  const effort = storedEffort !== undefined && model?.efforts.includes(storedEffort) ? storedEffort : model?.efforts[0];
+  const { model, effort } = resolveAgentChoice({ offered, connected, pickedModel, pickedEffort, lastRun, defaultModel, defaultEffort });
   const effortOptions = (model?.efforts ?? []).map((e) => ({
     value: e,
     label: e === "none" ? "Off" : EFFORT_LABELS[e],
@@ -454,10 +464,15 @@ export function Composer({
     const body = [chosenOption ?? "", next.markdown.trim()].filter(Boolean).join("\n\n");
     if (body === "" || pending) return;
     void onSend({ text: body, model: model?.id, effort }).then(
-      () => {
+      (sent) => {
         editor.current?.clear();
         setText("");
         setChoice(undefined);
+        // The new run now records these picks. A message joining a running turn keeps them for the next turn.
+        if (taskId !== undefined && sent !== undefined && sent.message.afterItems === undefined) {
+          void clearPickedModel(pickedModel);
+          void clearPickedEffort(pickedEffort);
+        }
       },
       () => undefined
     );
@@ -522,11 +537,11 @@ export function Composer({
           <ModelPicker
             sections={sections}
             value={model}
-            onChange={setModel}
+            onChange={setPickedModel}
             onManage={() => navigation.push({ name: "connections" })}
           />
           {model !== undefined && model.efforts.length > 0 ? (
-            <ThinkingPicker value={effort} options={effortOptions} onChange={setEffort} />
+            <ThinkingPicker value={effort} options={effortOptions} onChange={setPickedEffort} />
           ) : null}
           <View style={styles.flex} />
           {onStop && empty ? (
