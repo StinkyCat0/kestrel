@@ -514,6 +514,18 @@ export const HarnessCommands = Schema.Struct({
 })
 export type HarnessCommands = typeof HarnessCommands.Type
 
+/**
+ * Version 1 describes configuration and desktop prerequisites, not a guarantee of a successful start. The `platform`
+ * and `sandbox` value sets are closed within version 1: a new value is a new contract version.
+ */
+export const BoxCapabilities = Schema.Struct({
+  version: Schema.Literal(1),
+  platform: Schema.Literal("linux", "wsl", "lima", "other"),
+  sandbox: Schema.Literal("strict", "basic", "off"),
+  desktop: Schema.Literal("prerequisites-present", "unavailable"),
+})
+export type BoxCapabilities = typeof BoxCapabilities.Type
+
 export const Health = Schema.Struct({ ok: Schema.Literal(true), version: Schema.String })
 export type Health = typeof Health.Type
 
@@ -630,6 +642,7 @@ export class InternalError extends Schema.TaggedError<InternalError>()("Internal
 
 export const Paths = {
   health: "/api/health",
+  capabilities: "/api/capabilities",
   /** GET -> Usage of the signed-in user in the current billing period. */
   usage: "/api/usage",
   /** GET `?tz=<IANA zone>` -> UsageActivity of the signed-in user, days counted in that zone. */

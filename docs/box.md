@@ -259,3 +259,21 @@ Per user, the control plane (the Worker and its Hub Durable Object) handles only
 Until every client and box is cut over, Kestrel's box is also reached through the relay. A box dials `/box/connect` with `CLOUDAGENTS_BOX_TOKEN`, and the control plane forwards each app request over that socket, one Durable Object request per request. Clients use the relay when `BoxList.managedBox` is `null`. Relay deletion is a later change.
 
 Don't run a box against production with the production token from your machine: the control plane keeps one relayed box and a new connection replaces the live one.
+
+### Capability discovery
+
+`GET /api/capabilities` returns version 1 with `platform` (`linux`, `wsl`, `lima`, or `other`), the configured
+`sandbox` (`strict`, `basic`, or `off`), and `desktop`. `lima` is a Lima guest, detected by its cloud-init seed at
+`/mnt/lima-cidata`; Lima guests no longer report `linux`. `prerequisites-present` means Linux and the tools a desktop
+start needs (weston 14 or newer, Xwayland, xdotool, ffmpeg, and the xdamage-capture helper) were found at box startup.
+openbox, hsetroot and xterm are optional and do not change the answer. It does not guarantee a desktop will start;
+permissions, graphics and runtime resources still matter. `unavailable` means that check did not pass. The
+`platform` and `sandbox` value sets are closed within version 1: a value outside them is a new contract version.
+Additive fields within version 1 may be ignored. The response is a startup snapshot; restart the box after installing
+desktop tools to refresh it.
+
+Discovery needs a signed-in user, like the other box routes: send the same box token. Without one it answers 401
+`{"_tag":"Unauthorized"}`; a 401 says nothing about the box and means the token is missing or was rejected. A 404 means
+an older box without this endpoint. Clients treat a 404 as unknown capabilities and keep their existing behavior. They
+must also treat an unsupported contract version as unknown, rather than interpreting it as version 1. This endpoint
+does not change health or existing API behavior.
