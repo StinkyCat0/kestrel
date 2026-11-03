@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { ArrowRight, Download, ExternalLink, Globe, Laptop, Monitor, Terminal } from "lucide-react"
 import { queries, type DesktopAsset } from "@/api/queries"
 import { APP_URL, GITHUB_URL } from "@/components/PublicShell"
-import { Button } from "@/components/ui/button"
+import { Button } from "@cloudagents/ui/button"
 import { cn } from "@/lib/utils"
 
 const PLATFORMS = [
