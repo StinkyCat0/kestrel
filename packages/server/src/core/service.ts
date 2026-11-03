@@ -48,7 +48,7 @@ import { agentHome, desktopNamespace, openTaskPreviewSocket, prepareLaunch, remo
 import { type ToolkitName, installToolkit } from "../sandbox/toolkits"
 import { EventHub } from "./events"
 import { FileRefused, listFolder, openInside } from "./folder"
-import { AgentHarness, type AgentChoice } from "./harness"
+import { AgentHarness, agentCwd, type AgentChoice } from "./harness"
 import { formatHandoff } from "./handoff"
 import { withUserContext } from "./user-context"
 import { peerMessageText, type FromThread } from "./peer"
@@ -417,11 +417,19 @@ export interface CoreShape {
   readonly desktopLaunch: (taskId: string, command: string) => Effect.Effect<string, NotFound | InternalError>
   /** Used by the MCP handler (`toolkit_install`, only with a flake): builds a toolkit and puts its executables on the task's PATH; returns their names. */
   readonly toolkitInstall: (taskId: string, name: ToolkitName) => Effect.Effect<ReadonlyArray<string>, NotFound | InternalError>
-  /** Used by the MCP handler (`repo_checkout`): checks a repository out into the thread. One checkout per repo; asking again returns it. */
+  /**
+   * Used by the MCP handler (`repo_checkout`): checks a repository out into the thread. One checkout per repo; asking
+   * again returns it. `path` is the checkout's absolute directory, the same inside the sandbox. `instructionFiles`
+   * are the absolute paths of the agent instruction files at the root of a checkout this call made: the calling run
+   * started before it existed, so its harness has not loaded them. Empty for an existing checkout.
+   */
   readonly checkout: (
     taskId: string,
     input: CheckoutRequest,
-  ) => Effect.Effect<Checkout, NotFound | BadRequest | Conflict | InternalError>
+  ) => Effect.Effect<
+    { readonly checkout: Checkout; readonly path: string; readonly instructionFiles: ReadonlyArray<string> },
+    NotFound | BadRequest | Conflict | InternalError
+  >
   /** Used by the MCP handler: pushes a checkout's branch to its GitHub remote (never forced). Returns the branch. */
   readonly gitPush: (taskId: string, checkoutId?: string) => Effect.Effect<string, NotFound | BadRequest | InternalError>
   /** Used by the MCP handler: pushes the checkout's branch and opens its pull request, or returns the open one. */
@@ -532,6 +540,15 @@ const parseCheckoutRequest = (request: CheckoutRequest): Effect.Effect<RepoRef, 
     return Effect.fail(new BadRequest({ message: `${ref.repo} is not a github.com repository; pull requests need one` }))
   }
   return Effect.succeed(ref)
+}
+
+/** Files at a repository's root that Codex (AGENTS.md) and Claude Code (CLAUDE.md) load from their working directory. */
+const AGENT_INSTRUCTION_FILES = ["AGENTS.md", "CLAUDE.md"]
+
+/** A checkout `repo_checkout` returned, and the instruction files (`AGENT_INSTRUCTION_FILES`) at the root of a new one. */
+interface AddedCheckout {
+  readonly checkout: Checkout
+  readonly instructionFiles: ReadonlyArray<string>
 }
 
 /** The repository a stored checkout names. Stored values were validated on the way in. */
@@ -985,7 +1002,7 @@ export const CoreLive = Layer.effect(
     const addCheckout = (
       taskId: string,
       request: CheckoutRequest,
-    ): Effect.Effect<Checkout, NotFound | BadRequest | Conflict | InternalError> =>
+    ): Effect.Effect<AddedCheckout, NotFound | BadRequest | Conflict | InternalError> =>
       checkoutLock.withPermits(1)(
         Effect.gen(function* () {
           const task = yield* requireTask(taskId)
@@ -995,8 +1012,9 @@ export const CoreLive = Layer.effect(
           yield* refuseOverStorage(taskId)
           const ref = yield* parseCheckoutRequest(request)
           const existing = task.checkouts.find((c) => c.repo === ref.repo)
-          if (existing) return existing
-          const checkout = yield* cloneCheckout(task, request, ref)
+          // An existing checkout was there when this run started, or its instructions were named when it was made.
+          if (existing) return { checkout: existing, instructionFiles: [] }
+          const { checkout, instructionFiles } = yield* cloneCheckout(task, request, ref)
           const updated = yield* store.update((s): Either.Either<Task, NotFound> => {
             const found = findTask(s, taskId)
             if (Either.isLeft(found)) return Either.left(found.left)
@@ -1006,16 +1024,19 @@ export const CoreLive = Layer.effect(
             return Either.right({ ...stored })
           })
           hub.publish({ _tag: "task.updated", task: updated })
-          return checkout
+          return { checkout, instructionFiles }
         }),
       )
 
-    /** Clones the repo's mirror into a new checkout dir of `task`. Runs under `checkoutLock`; removes what it made on failure. */
+    /**
+     * Clones the repo's mirror into a new checkout dir of `task`, and names the agent instruction files at its root.
+     * Runs under `checkoutLock`; removes what it made on failure.
+     */
     const cloneCheckout = (
       task: Task,
       request: CheckoutRequest,
       ref: RepoRef,
-    ): Effect.Effect<Checkout, BadRequest | InternalError> => {
+    ): Effect.Effect<AddedCheckout, BadRequest | InternalError> => {
       const id = newId()
       const threadDir = threadDirOf(task.id)
       const dir = freeDirName(
@@ -1069,12 +1090,15 @@ export const CoreLive = Layer.effect(
             pinRef: checkoutPinRef(task.id, id),
           })
           .pipe(Effect.mapError(toInternal("create checkout")))
-        // The icon comes from the mirror at the fork point, never from the agent-writable checkout; a lookup that
-        // fails costs the checkout nothing but its icon.
+        // The icon and the instruction files come from the mirror at the fork point, never from the agent-writable
+        // checkout (which the agent may have replaced with a symlink by now); a lookup that fails costs only the hint.
         const icon = yield* workspace.findIcon(mirrorPath, fork.startSha).pipe(
           Effect.catchAll((e) => Effect.as(Effect.logWarning(`icon for ${ref.repo}: ${e.message}`), null)),
         )
-        return {
+        const instructionFiles = yield* workspace.filesAt(mirrorPath, fork.startSha, AGENT_INSTRUCTION_FILES).pipe(
+          Effect.catchAll((e) => Effect.as(Effect.logWarning(`instruction files for ${ref.repo}: ${e.message}`), [])),
+        )
+        const checkout: Checkout = {
           id,
           repo: ref.repo,
           dir,
@@ -1083,6 +1107,7 @@ export const CoreLive = Layer.effect(
           createdAt: nowIso(),
           ...(icon === null ? {} : { icon }),
         }
+        return { checkout, instructionFiles }
       }).pipe(Effect.tapError(() => removeOnFailure))
     }
 
@@ -1805,7 +1830,9 @@ export const CoreLive = Layer.effect(
           const session = running === undefined ? undefined : state.runSessions.find((s) => s.runId === running.id)
           const provider = commandProvider(running, session, model)
           const cliProvider: CliProvider = provider === "anthropic" ? "claude-cli" : "codex-cli"
-          const commands = yield* cliAuth.discoverCommands(user, cliProvider, threadDirOf(task.id))
+          // Started where the agent starts, so the list holds the project commands and skills of its checkout.
+          const workspace = threadDirOf(task.id)
+          const commands = yield* cliAuth.discoverCommands(user, cliProvider, workspace, agentCwd(workspace, task))
           return { provider, commands }
         }),
 
@@ -2196,7 +2223,11 @@ export const CoreLive = Layer.effect(
           return yield* installToolkit(flake, join(config.homesDir, taskId), name)
         }),
 
-      checkout: (taskId, input) => addCheckout(taskId, input),
+      checkout: (taskId, input) =>
+        Effect.map(addCheckout(taskId, input), ({ checkout, instructionFiles }) => {
+          const path = join(threadDirOf(taskId), checkout.dir)
+          return { checkout, path, instructionFiles: instructionFiles.map((name) => join(path, name)) }
+        }),
 
       taskOwner: (taskId) => Effect.map(requireTask(taskId), (task) => task.owner),
       storageUsed: (taskId) => storageUsed.get(taskId) ?? null,

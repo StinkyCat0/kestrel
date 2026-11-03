@@ -132,8 +132,10 @@ export interface SandboxBind {
 export interface BwrapOptions {
   /** `strict`: the nix store and the DNS/TLS files, in the task's namespaces. `basic`: the host's system directories. */
   readonly level: "strict" | "basic"
-  /** The thread workspace: the agent's working directory, bound read-write. Absolute. */
+  /** The thread workspace, bound read-write. Absolute. */
   readonly workspacePath: string
+  /** Where the process starts: `workspacePath` or a directory inside it. Absolute. */
+  readonly cwd: string
   /** The owner's mirror directory, bound read-only: checkouts read their git objects from it. Absolute. */
   readonly mirrorDir: string
   /** Host dir for the persisted per-task home, bound rw at /home/agent. */
@@ -215,7 +217,7 @@ export const buildBwrapArgv = (opts: BwrapOptions): string[] => {
     argv.push(...gpuArgs())
   }
   for (const [name, value] of Object.entries(opts.env)) argv.push("--setenv", name, value)
-  argv.push("--chdir", opts.workspacePath, "--", "sh", "-c", opts.command)
+  argv.push("--chdir", opts.cwd, "--", "sh", "-c", opts.command)
   return argv
 }
 
@@ -226,8 +228,9 @@ export const buildBwrapArgv = (opts: BwrapOptions): string[] => {
  * directories and the agent CLIs installed in the box user's home (`homeToolArgs`). `network: "host"` shares the box's
  * network (sign-in needs it). `network: "none"` gives the process an empty network namespace: discovery never needs
  * the network, and the box's loopback services (broker, MCP, other tasks' servers) must stay out of reach. With
- * `workspacePath` it runs there and sees that thread workspace read-only, so project commands and skills are
- * discoverable.
+ * `workspacePath` it sees that thread workspace read-only, so project commands and skills are discoverable, and starts
+ * in `cwd` inside it (default: the workspace). `cwd` is resolved inside the sandbox, never bound from the host: a
+ * checkout the agent replaced with a symlink points at nothing mounted here.
  */
 export const cliBwrapArgs = (
   homeDir: string,
@@ -238,6 +241,7 @@ export const cliBwrapArgs = (
     readonly homeToolArgs: ReadonlyArray<string>
     readonly network: "host" | "none"
     readonly workspacePath?: string
+    readonly cwd?: string
   },
 ): string[] => {
   const workspacePath = options.workspacePath
@@ -269,7 +273,7 @@ export const cliBwrapArgs = (
     argv.push(...options.homeToolArgs)
   }
   for (const [name, value] of Object.entries(env)) argv.push("--setenv", name, value)
-  argv.push("--chdir", workspacePath ?? homeDir, "--", ...command)
+  argv.push("--chdir", options.cwd ?? workspacePath ?? homeDir, "--", ...command)
   return argv
 }
 
@@ -327,8 +331,10 @@ export interface LaunchRequest {
   /** Task the process belongs to; its systemd slice carries the resource limits. */
   readonly taskId: string
   readonly kind: LaunchKind
-  /** The thread workspace: the agent's working directory. */
+  /** The thread workspace, bound read-write; the whole of it stays reachable whatever `cwd` is. */
   readonly workspacePath: string
+  /** Where the process starts, inside `workspacePath`; defaults to `workspacePath`. */
+  readonly cwd?: string
   /** The owner's mirror directory, bound read-only into the sandbox. */
   readonly mirrorDir: string
   readonly homeDir: string
@@ -738,6 +744,7 @@ export const prepareLaunch = (req: LaunchRequest): Effect.Effect<Launch, Interna
       { discard: true },
     )
     const home = agentHome(settings, req.homeDir)
+    const cwd = req.cwd ?? req.workspacePath
     const hostPath = process.env.PATH ?? "/usr/bin:/bin"
     const env: Record<string, string> = {
       ...(settings.level === "off" ? platformEnv() : {}),
@@ -764,6 +771,7 @@ export const prepareLaunch = (req: LaunchRequest): Effect.Effect<Launch, Interna
       buildBwrapArgv({
         level,
         workspacePath: req.workspacePath,
+        cwd,
         mirrorDir: req.mirrorDir,
         homeDir: req.homeDir,
         display: ns === null ? undefined : displayNumber(req.display, x11Dir(ns.holder)),
@@ -781,14 +789,14 @@ export const prepareLaunch = (req: LaunchRequest): Effect.Effect<Launch, Interna
     const [file, ...args] = [...joinArgv, ...sandbox]
     const inner = { file: file as string, args }
 
-    if (settings.systemd === null) return { ...inner, env, cwd: req.workspacePath, home }
+    if (settings.systemd === null) return { ...inner, env, cwd, home }
 
     return {
       file: systemdRun as string,
       args: [...scopeArgs(settings.systemd, req.taskId, req.kind), inner.file, ...inner.args],
       // systemd-run needs the user bus; bwrap's --clearenv keeps it out of the sandbox.
       env: { ...env, ...busEnv() },
-      cwd: req.workspacePath,
+      cwd,
       home,
     }
   })
