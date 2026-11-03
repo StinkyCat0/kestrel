@@ -3,9 +3,12 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import {
   CliProvider,
   ControlPaths,
+  HARNESS_IDS,
+  HARNESS_LABELS,
   MODEL_PROVIDERS,
   connectedModelProviders,
   providerModels,
+  providersForHarness,
   type CliAuthStatus,
   type CliLoginStart,
   type Connection,
@@ -13,7 +16,7 @@ import {
   type ModelProviderInfo,
 } from "@cloudagents/protocol"
 import { Schema } from "effect"
-import { ChevronDown } from "lucide-react"
+import { Check, ChevronDown } from "lucide-react"
 import { api } from "@/api/client"
 import { keys, queries } from "@/api/queries"
 import { Alert } from "@cloudagents/ui/alert"
@@ -32,6 +35,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { SERVER_URL } from "@/config"
 import { useActiveBoxId } from "@/hooks/useActiveBox"
+import { useEnabledHarnesses } from "@/hooks/useHarness"
 import { setShownModels, useShownModels } from "@/hooks/useShownModels"
 import { errorText } from "@/util"
 
@@ -40,6 +44,59 @@ const MIN_API_KEY_LENGTH = 8
 
 /** While a codex sign-in is pending, connections are re-read at this interval until the box reports the login. */
 const CLI_POLL_MS = 3000
+
+/** Which agent CLIs chats may use. Each thread keeps its own model and harness; disabling one only narrows the menu. */
+function HarnessCard() {
+  const [enabled, , toggle] = useEnabledHarnesses()
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <h2 className="font-semibold tracking-tight">Harnesses</h2>
+        <p className="text-muted-foreground">
+          The agent CLIs available to every thread. A thread's own model pick decides which one runs it; this list only
+          controls what is on offer. A disabled harness never takes a thread's next message.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {HARNESS_IDS.map((id) => {
+          const providers = providersForHarness(id)
+          const provider = providers[0]
+          const active = enabled.includes(id)
+          return (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={active}
+              onClick={() => toggle(id)}
+              className={
+                active
+                  ? "flex flex-col gap-1.5 rounded-xl border border-white/25 bg-white/[0.06] p-4 text-left transition-colors"
+                  : "flex flex-col gap-1.5 rounded-xl border border-white/[0.06] bg-card/40 p-4 text-left transition-colors hover:border-white/15 hover:bg-card/70"
+              }
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold">
+                {HARNESS_LABELS[id]}
+                {active && <Check className="ml-auto size-4 text-foreground/80" />}
+              </span>
+              <span className="text-xs leading-relaxed text-muted-foreground">
+                {providers.map((p) => p.name).join(", ")}
+              </span>
+              <span className="text-xs leading-relaxed text-muted-foreground">
+                {provider?.auth === "harness-login"
+                  ? `Own CLI login${provider.setup === undefined ? "" : ` — run ${provider.setup}`}`
+                  : provider?.auth === "cli-login"
+                    ? "API key or its CLI subscription"
+                    : "API key from Connections"}
+                {provider?.mcp === false ? " · no MCP tools" : " · MCP tools"}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 /** Body of Settings › Connections: the accounts and keys, then the models each provider shows in the chat picker. */
 export function Connections() {
@@ -52,6 +109,7 @@ export function Connections() {
 
   return (
     <>
+      <HarnessCard />
       {connections.error && <Alert>{errorText(connections.error)}</Alert>}
       {cliAuth.error && <Alert>{errorText(cliAuth.error)}</Alert>}
       {connections.isPending && <div className="text-muted-foreground">Loading…</div>}
@@ -124,7 +182,15 @@ function ModelListRow({ provider, connected }: { provider: ModelProviderInfo; co
     <div className="flex items-center gap-3 px-5 py-4">
       <div className="flex flex-col gap-0.5">
         <ConnectionHeader label={provider.name} connected={connected} />
-        {!connected && <span className="text-xs text-muted-foreground">Connect a key or subscription above to use these.</span>}
+        {provider.standalone ? (
+          <span className="text-xs text-muted-foreground">
+            Uses the CLI login configured on the box{provider.setup === undefined ? "." : ` — run ${provider.setup}.`}
+            {provider.mcp ? " MCP tools are available." : " This adapter does not support MCP tools."}
+          </span>
+        ) : (
+          !connected && <span className="text-xs text-muted-foreground">Connect a key or subscription above to use these.</span>
+        )}
+        {provider.hint !== undefined && <span className="text-xs text-muted-foreground">{provider.hint}</span>}
       </div>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -188,6 +254,9 @@ function ConnectionRow({ connection }: { connection: Connection }) {
         account={connection.account}
         expired={connection.expired === true}
       />
+      {connection.hint !== undefined && (
+        <p className="text-xs leading-relaxed text-muted-foreground">{connection.hint}</p>
+      )}
       {connection.kind === "oauth" ? (
         connection.available ? (
           <Button asChild variant="soft" className="w-fit">

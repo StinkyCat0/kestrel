@@ -1,7 +1,7 @@
 import { Context, Layer } from "effect"
 import { join, resolve } from "node:path"
 import { availableParallelism } from "node:os"
-import type { ModelProvider } from "@cloudagents/protocol"
+import { MODEL_PROVIDERS, type AgentHarness, type ModelProvider } from "@cloudagents/protocol"
 import pkg from "../package.json"
 import type { SandboxLevel } from "./sandbox"
 import type { Provisioning, SystemdSettings } from "./sandbox/systemd"
@@ -131,12 +131,25 @@ export const loadConfig = (): ServerConfig => {
   const dataDir = resolve(process.env.CLOUDAGENTS_DATA_DIR ?? join(repoRoot, ".data"))
   const fakeAgent = process.env.CLOUDAGENTS_FAKE_AGENT === "1"
   const fakeCommand = `${shellQuote(process.execPath)} ${shellQuote(join(repoRoot, "packages/server/scripts/fake-agent.ts"))}`
-  const agentCommands: Record<ModelProvider, string> = fakeAgent
-    ? { anthropic: fakeCommand, openai: fakeCommand }
-    : {
-        anthropic: process.env.CLOUDAGENTS_ANTHROPIC_COMMAND ?? DEFAULT_ANTHROPIC_COMMAND,
-        openai: process.env.CLOUDAGENTS_OPENAI_COMMAND ?? DEFAULT_OPENAI_COMMAND,
-      }
+  const harnessCommands: Record<Exclude<AgentHarness, "acp">, string> = {
+    claude: process.env.CLOUDAGENTS_ANTHROPIC_COMMAND ?? DEFAULT_ANTHROPIC_COMMAND,
+    codex: process.env.CLOUDAGENTS_OPENAI_COMMAND ?? DEFAULT_OPENAI_COMMAND,
+  }
+  const acpCommands: Partial<Record<ModelProvider, string>> = {
+    omp: process.env.CLOUDAGENTS_OMP_COMMAND ?? "omp acp",
+    pi: process.env.CLOUDAGENTS_PI_COMMAND ?? "pi-acp",
+    hermes: process.env.CLOUDAGENTS_HERMES_COMMAND ?? "hermes acp",
+  }
+  const agentCommands: Record<ModelProvider, string> = Object.fromEntries(
+    MODEL_PROVIDERS.map((provider) => [
+      provider.id,
+      fakeAgent
+        ? fakeCommand
+        : provider.harness === "acp"
+          ? (acpCommands[provider.id] as string)
+          : harnessCommands[provider.harness],
+    ]),
+  ) as Record<ModelProvider, string>
   const sandboxPath = process.env.CLOUDAGENTS_SANDBOX_PATH?.trim() || null
   const sandbox = sandboxLevel(sandboxPath)
   if (sandbox === "off") console.warn("CLOUDAGENTS_SANDBOX=off: agent runs are NOT sandboxed")

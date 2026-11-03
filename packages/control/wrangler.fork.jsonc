@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kestrel-fork",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  // A fork deploys to its own workers.dev URL; it must not claim jaren's custom domains.
+  "workers_dev": true,
+  "assets": {
+    "directory": "../app/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/auth/*", "/box/*", "/webhooks/*", "/_preview/*"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "Hub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }]
+}

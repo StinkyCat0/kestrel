@@ -13,3 +13,5 @@ result
 .box.env
 .astro/
 .expo/
+
+packages/desktop/release/

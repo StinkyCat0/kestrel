@@ -53,6 +53,7 @@ const storedView = (
   account: row?.account ?? null,
   available: isAvailable(provider, env),
   ...(expired ? { expired: true } : {}),
+  ...(provider.kind === "apikey" && provider.hint !== undefined ? { hint: provider.hint } : {}),
 })
 
 const cliView = (provider: CliProvider, status: CliAuthStatus | undefined): Connection => ({

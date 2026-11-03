@@ -40,7 +40,6 @@ describe("resolveAgentChoice", () => {
     expect(run.model?.id).toBe(second)
     expect(run.effort).toBe(anthropic[1]!.efforts[0])
   })
-
   test("the last run's model stays while hidden from the picker, and falls away once its provider is disconnected", () => {
     expect(resolveAgentChoice({ ...base, lastRun: { model: hidden } }).model?.id).toBe(hidden)
     expect(resolveAgentChoice({ ...base, connected: [], lastRun: { model: hidden } }).model?.id).toBe(first)

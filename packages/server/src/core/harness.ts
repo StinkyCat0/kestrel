@@ -1,14 +1,20 @@
 import { Context, Effect, Either, Layer, Runtime, Schema } from "effect"
 import { spawn, type ChildProcess } from "node:child_process"
 import { createWriteStream, lstatSync, type WriteStream } from "node:fs"
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
+import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises"
 import { createInterface } from "node:readline"
 import { basename, join } from "node:path"
+import { homedir } from "node:os"
 import {
   InternalError,
   RunItems,
   DEFAULT_MODEL_PROVIDER,
+  agentChoiceProblem,
+  agentChoiceProvider,
+  defaultModelOf,
   modelInfo,
+  providerHarness,
+  providerInfo,
   type AgentEffort,
   type AgentItem,
   type AgentModel,
@@ -16,13 +22,15 @@ import {
   type CliProvider,
   type Message,
   type ModelProvider,
+  type RelayCredentials,
   type Run,
   type ServerEvent,
   type Task,
 } from "@cloudagents/protocol"
 import { CliAuth } from "../cliauth"
-import { CredentialBroker } from "../broker"
+import { CredentialBroker, credentialFor, type BrokerProvider } from "../broker"
 import { boxControl } from "../control/client"
+import { CredentialStore } from "../credentials"
 import { Config, VERSION } from "../config"
 import { GH_SHIM_SCRIPT } from "../gh/shim"
 import { NEW_PROCESS_GROUP, killProcessGroup, ownGroup } from "../process"
@@ -31,6 +39,7 @@ import { EventHub } from "./events"
 import { StateStore, newId, nowIso, type Mutable, type StoreState } from "./state"
 import { makeClaudeDriver } from "./claude-stream"
 import { makeCodexDriver, type CodexRunInput } from "./codex-app-server"
+import { makeAcpDriver } from "./acp-driver"
 import type { RunDriver } from "./run-driver"
 import { saveRunImage } from "./run-images"
 import { makeTranscript, type Transcript } from "./transcript"
@@ -91,6 +100,8 @@ export class AgentHarness extends Context.Tag("cloudagents/AgentHarness")<AgentH
 /** Per-message agent choice; omitted fields leave the harness default. */
 export interface AgentChoice {
   readonly model?: AgentModel
+  /** The connection the thread selected for this model; omitted means the model's own provider. */
+  readonly provider?: ModelProvider
   readonly effort?: AgentEffort
 }
 
@@ -98,6 +109,10 @@ interface ActiveRun {
   readonly child: ChildProcess
   readonly log: WriteStream
   readonly taskId: string
+  /** The model provider that minted this run's session, so a Claude stream is attributed to the right one. */
+  readonly provider: ModelProvider
+  readonly stdoutLines: string[]
+  readonly stderrLines: string[]
   /** Display items in insertion order; a replacement keeps its original position. */
   readonly items: Map<string, AgentItem>
   /** When each item was last published, and replacements held back until ITEM_PUBLISH_MS has passed. */
@@ -111,21 +126,68 @@ interface ActiveRun {
   sessionId: string | null
   /** The conversation the harness holds with the CLI over stdin; null for replays, which only print. */
   driver: RunDriver | null
-  readonly agentKind: "claude" | "codex" | null
+  readonly agentKind: "claude" | "codex" | "acp" | null
   /** Failed tool calls already counted; a later item with the same id only replaces the earlier one. */
   readonly failedTools: Set<string>
   /** Set once the run is stopped; what its process reports while it shuts down is not a tool failure. */
   stopped: boolean
+  /** True when stderr is the CLI's own log (Codex app-server), not output worth showing as the agent's answer. */
+  readonly stderrIsLog: boolean
+  /** True for an ACP run: the driver owns item creation; the stream is not passed through the transcript. */
+  readonly acp: boolean
 }
 
 /** How the harness talks to a run's CLI over stdin. */
 type RunConversation =
   | { readonly kind: "codex"; readonly input: Omit<CodexRunInput, "clientVersion"> }
   | { readonly kind: "claude"; readonly prompt: string }
+  | {
+      readonly kind: "acp"
+      readonly input: {
+        readonly prompt: string
+        readonly provider: ModelProvider
+        readonly model?: string
+        readonly resumeSession: string | null
+        readonly cwd: string
+        readonly mcpUrl: string
+        readonly mcpToken: string
+        readonly clientVersion: string
+      }
+    }
+
+/** The CLI config directory each ACP harness reads its own model login from. */
+const ACP_CONFIG_DIRS: Partial<Record<ModelProvider, string>> = {
+  omp: ".omp",
+  pi: ".pi",
+  hermes: ".hermes",
+}
+
+/** A broker provider for a model run, or null when the ACP harness owns its own model credentials. */
+const brokerProviderOf = (provider: ModelProvider): BrokerProvider | null =>
+  provider === "omp" || provider === "pi" || provider === "hermes" ? null : provider
+
+/** API-key env for an ACP CLI from the user's connected Kestrel providers. */
+const acpKeyEnv = (creds: RelayCredentials | null): Record<string, string> => {
+  if (creds === null) return {}
+  const provider = creds.providers ?? {}
+  const env: Record<string, string> = {}
+  const put = (name: string, value: string | undefined): void => {
+    if (value !== undefined && value !== "") env[name] = value
+  }
+  put("DEEPSEEK_API_KEY", provider.deepseek)
+  put("OPENAI_API_KEY", provider.openai ?? creds.openai ?? undefined)
+  put("ANTHROPIC_API_KEY", provider.anthropic ?? creds.anthropic ?? undefined)
+  put("OPENROUTER_API_KEY", provider.openrouter)
+  put("ZAI_API_KEY", provider.zai)
+  put("MINIMAX_API_KEY", provider.minimax)
+  put("MOONSHOT_API_KEY", provider.moonshot)
+  return env
+}
 
 /** What a run starts from besides its process: the session's last context use, and its conversation if it has one. */
 interface RunSession {
   readonly seed: ContextUsage | null
+  readonly provider: ModelProvider
   readonly conversation: RunConversation | null
   /** The queue item the run showed while it waited for a slot; it seeds the run's items. Null when it got one at once. */
   readonly queued: AgentItem | null
@@ -194,6 +256,29 @@ const LOGIN_ENV: Record<CliProvider, { readonly env: string; readonly broker: Re
   "codex-cli": { env: "CODEX_HOME", broker: ["OPENAI_API_KEY", "OPENAI_BASE_URL"] },
 }
 
+/** Every CLI login is mounted on Anthropic/OpenAI runs; third-party gateways mount none. */
+export const loginsForProvider = <T extends { readonly provider: CliProvider }>(
+  provider: ModelProvider,
+  all: readonly T[],
+): readonly T[] => (provider === "anthropic" || provider === "openai" ? all : [])
+
+/** The Claude Code tier pins and auto-compact window for a third-party gateway run. */
+export const claudeTierEnv = (model: AgentModel): Record<string, string> => {
+  const info = modelInfo(model)
+  return {
+    CLOUDAGENTS_MODEL: model,
+    ANTHROPIC_MODEL: model,
+    ANTHROPIC_DEFAULT_FABLE_MODEL: model,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: model,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
+    CLAUDE_CODE_SUBAGENT_MODEL: model,
+    ...(info.compactWindow === undefined
+      ? {}
+      : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(info.compactWindow) }),
+  }
+}
+
 export const AgentHarnessLive = Layer.effect(
   AgentHarness,
   Effect.gen(function* () {
@@ -201,6 +286,7 @@ export const AgentHarnessLive = Layer.effect(
     const store = yield* StateStore
     const hub = yield* EventHub
     const broker = yield* CredentialBroker
+    const credentials = yield* CredentialStore
     const cliAuth = yield* CliAuth
     const settings = sandboxSettingsOf(config)
     if (settings.systemd) {
@@ -369,10 +455,20 @@ export const AgentHarnessLive = Layer.effect(
           const failure = spawnError ?? (turn?.status === "failed" ? turn.error : null)
           // Diagnostics stay in output.log and agent.output, never in portable conversation history:
           // a log may echo the entire prompt or tool output and amplify it on the next handoff/delegation.
+          const stdout = entry.stdoutLines.join("\n").trim()
+          const stderr = entry.stderrIsLog ? "" : entry.stderrLines.join("\n").trim()
+          const acpText = entry.acp
+            ? [...entry.items.values()]
+                .filter((item): item is AgentItem & { _tag: "text" } => item._tag === "text")
+                .map((item) => item.text)
+                .join("\n\n")
+                .trim()
+            : ""
+          const finalText = entry.transcript.finalText() ?? (acpText === "" ? null : acpText)
           const text =
-            entry.transcript.finalText() ??
-            failure ??
-            (ok ? "Run finished with no output." : `Run failed (exit code ${exitCode ?? "none"}).`)
+            finalText ??
+            ((entry.stderrIsLog ? (failure ?? stdout) : stdout || stderr || failure) ||
+              (ok ? "Run finished with no output." : `Run failed (exit code ${exitCode ?? "none"}).`))
           const message: Message = {
             id: newId(),
             taskId: task.id,
@@ -385,7 +481,11 @@ export const AgentHarnessLive = Layer.effect(
           return Either.right({ run: { ...run }, task: { ...task }, message })
         })
         if (outcome === null) return
-        if (outcome.run.status === "failed" && entry.agentKind !== null && turn?.status === "failed") {
+        if (
+          outcome.run.status === "failed" &&
+          (entry.agentKind === "claude" || entry.agentKind === "codex") &&
+          turn?.status === "failed"
+        ) {
           toolFailures?.record(agentFailure(entry.agentKind, turn.error))
         }
         publish({ _tag: "message.created", message: outcome.message })
@@ -464,6 +564,8 @@ export const AgentHarnessLive = Layer.effect(
         try {
           const parsed: unknown = JSON.parse(trimmed)
           entry.driver?.receive(parsed)
+          // ACP updates are decoded by its driver into items; there is no Claude/Codex transcript to run.
+          if (entry.acp) return
           // Every parsed line goes through the run's transcript, whether or not it yields items.
           for (const item of entry.transcript.push(parsed)) {
             putItem(runId, entry, item)
@@ -474,7 +576,7 @@ export const AgentHarnessLive = Layer.effect(
             entry.context = context
             runFork(setContext(entry.taskId, context))
           }
-          const session = sessionOf(parsed)
+          const session = sessionOf(parsed, entry.provider)
           if (session !== null) {
             entry.sessionId = session.sessionId
             runFork(recordSession(runId, session.sessionId, session.provider))
@@ -516,6 +618,9 @@ export const AgentHarnessLive = Layer.effect(
               child,
               log,
               taskId: task.id,
+              provider: session.provider,
+              stdoutLines: [],
+              stderrLines: [],
               items: new Map<string, AgentItem>(session.queued ? [[session.queued.id, session.queued]] : []),
               published: new Map(),
               held: new Map(),
@@ -527,6 +632,9 @@ export const AgentHarnessLive = Layer.effect(
               agentKind: session.conversation?.kind ?? null,
               failedTools: new Set(),
               stopped: false,
+              stderrIsLog:
+                session.conversation?.kind === "codex" || session.conversation?.kind === "acp",
+              acp: session.conversation?.kind === "acp",
             }
             const stdin = child.stdin
             // A closed pipe (the CLI is gone) shows up as the child's exit, not as a write error.
@@ -540,7 +648,7 @@ export const AgentHarnessLive = Layer.effect(
             // onDone means all model work is over and the process is merely waiting to exit.
             const onDone = () => {
               stdin.end()
-              if (session.conversation?.kind === "codex") {
+              if (session.conversation?.kind === "codex" || session.conversation?.kind === "acp") {
                 setTimeout(() => active.has(run.id) && killProcessGroup(child.pid, "SIGTERM"), KILL_GRACE_MS).unref()
               }
             }
@@ -555,11 +663,21 @@ export const AgentHarnessLive = Layer.effect(
                   send,
                   onThread: (threadId) => {
                     entry.sessionId = threadId
-                    runFork(recordSession(run.id, threadId, "openai"))
+                    runFork(recordSession(run.id, threadId, entry.provider))
                   },
                   onDone,
                 },
               )
+            } else if (conversation.kind === "acp") {
+              entry.driver = makeAcpDriver(conversation.input, {
+                send,
+                onThread: (sessionId) => {
+                  entry.sessionId = sessionId
+                  runFork(recordSession(run.id, sessionId, entry.provider))
+                },
+                onDone,
+                onItem: (item) => putItem(run.id, entry, item),
+              })
             } else {
               // Claude Code names its session in its stream-json `init`, which `handleLine` records.
               entry.driver = makeClaudeDriver(conversation.prompt, { send, onDone })
@@ -646,7 +764,8 @@ export const AgentHarnessLive = Layer.effect(
       ),
       spawn: (task, run, prompt, display, user, resumeSession, choice) => {
         const launch = (admission: Admission) => Effect.gen(function* () {
-          const provider = choice.model === undefined ? DEFAULT_MODEL_PROVIDER : modelInfo(choice.model).provider
+          const provider = agentChoiceProvider(choice)
+          const harness = providerHarness(provider)
           const homeDir = join(config.homesDir, task.id)
           const mcpUrl = `${config.mcpBaseUrl}/mcp/${task.id}`
           const mcpConfigHost = join(homeDir, ".cloudagents", "mcp.json")
@@ -654,10 +773,20 @@ export const AgentHarnessLive = Layer.effect(
           // The run's `gh`: a script that asks the box to run GitHub CLI commands, so no GitHub token enters the sandbox.
           const ghBinHost = join(homeDir, ".kestrel", "gh")
           const ghBinAgent = join(agentHome(settings, homeDir), ".kestrel", "gh")
+          // An ACP harness reads its own model login from this directory; sandboxed runs get it bound in, and
+          // unsandboxed runs symlink it into the task home (their HOME) so the CLI finds the same config.
+          const acpConfigDir = harness === "acp" ? ACP_CONFIG_DIRS[provider] : undefined
+          const acpConfigHost = acpConfigDir === undefined ? null : join(homedir(), acpConfigDir)
+          const acpConfigInside =
+            acpConfigDir === undefined ? null : join(agentHome(settings, homeDir), acpConfigDir)
+          const acpBinds =
+            acpConfigHost !== null && acpConfigInside !== null && settings.level !== "off"
+              ? [{ host: acpConfigHost, sandbox: acpConfigInside }]
+              : []
 
           const started = yield* Effect.gen(function* () {
-            // The run's token authorizes its MCP session as well as its model calls.
-            const lease = yield* broker.issue(run.id, user)
+            // The run's token authorizes its MCP session; ACP harnesses broker no model calls of their own.
+            const lease = yield* broker.issue(run.id, user, brokerProviderOf(provider))
             yield* Effect.tryPromise({
               try: async () => {
                 await mkdir(join(homeDir, ".cloudagents"), { recursive: true })
@@ -672,12 +801,24 @@ export const AgentHarnessLive = Layer.effect(
                 await mkdir(ghBinHost, { recursive: true })
                 await writeFile(join(ghBinHost, "gh"), GH_SHIM_SCRIPT, { encoding: "utf8", mode: 0o755 })
                 await chmod(join(ghBinHost, "gh"), 0o755)
+                if (acpConfigHost !== null && acpConfigDir !== undefined) {
+                  await mkdir(acpConfigHost, { recursive: true })
+                  if (settings.level === "off") {
+                    await symlink(acpConfigHost, join(homeDir, acpConfigDir)).catch((e: NodeJS.ErrnoException) => {
+                      if (e.code !== "EEXIST") throw e
+                    })
+                  }
+                }
               },
               catch: (e) => new InternalError({ message: `cannot prepare run dir: ${String(e)}` }),
             })
 
-            // A user's own CLI logins replace the broker's API keys for that provider.
-            const logins = yield* cliAuth.loggedInDirs(user).pipe(Effect.mapError((e) => new InternalError({ message: e.message })))
+            // Anthropic and OpenAI runs keep both CLI logins, as before: either CLI may shell out to the other. A key for
+            // OpenRouter, Z.ai, DeepSeek, MiniMax or Kimi is never replaced by a Claude/ChatGPT login.
+            const allLogins = yield* cliAuth
+              .loggedInDirs(user)
+              .pipe(Effect.mapError((e) => new InternalError({ message: e.message })))
+            const logins = loginsForProvider(provider, allLogins)
             const loginDirs = logins.map((login) => ({
               provider: login.provider,
               host: login.dir,
@@ -687,8 +828,33 @@ export const AgentHarnessLive = Layer.effect(
             const dropped = new Set(logins.flatMap((login) => LOGIN_ENV[login.provider].broker))
             const keptBroker = Object.fromEntries(Object.entries(lease.env).filter(([key]) => !dropped.has(key)))
             const loginEnv = Object.fromEntries(loginDirs.map((d) => [LOGIN_ENV[d.provider].env, d.inside]))
-            const workspacePath = join(config.threadsDir, task.id)
-            const cwd = agentCwd(workspacePath, task)
+            // Claude Code picks its helper models (summaries, sub-agents) by name unless every tier is pinned, and a
+            // gateway only knows its own ids. A third-party provider's default model fills every tier for that run.
+            const providerModel =
+              choice.model ??
+              (harness === "claude" && provider !== "anthropic" ? defaultModelOf(provider)?.id : undefined)
+            const providerModelEnv: Record<string, string> =
+              harness === "claude" && provider !== "anthropic" && providerModel !== undefined
+                ? claudeTierEnv(providerModel)
+                : {}
+            const creds = yield* credentials.get(user)
+            // Fail before the CLI starts when a brokered run has neither a key nor its vendor's CLI login. The broker
+            // would only answer 424 mid-turn, which the agent reports as a model error rather than a setup problem.
+            const brokerProvider = brokerProviderOf(provider)
+            if (brokerProvider !== null) {
+              const key = credentialFor(creds, brokerProvider)
+              const vendorLogin = provider === "anthropic" ? "claude-cli" : provider === "openai" ? "codex-cli" : null
+              const covered = vendorLogin !== null && allLogins.some((login) => login.provider === vendorLogin)
+              if (key === null && !covered) {
+                const signIn = vendorLogin === null ? "" : ` or sign in with the ${vendorLogin === "claude-cli" ? "Claude" : "ChatGPT"} CLI`
+                return yield* Effect.fail(
+                  new InternalError({
+                    message: `No ${providerInfo(provider).name} credential is configured. Add a key${signIn} in Settings › Connections.`,
+                  }),
+                )
+              }
+            }
+            const acpEnv = harness === "acp" ? acpKeyEnv(creds) : {}
             const launch = yield* prepareLaunch({
               settings,
               taskId: task.id,
@@ -715,10 +881,12 @@ export const AgentHarnessLive = Layer.effect(
                 ...(resumeSession === null ? {} : { CLOUDAGENTS_RESUME_SESSION: resumeSession }),
                 ...keptBroker,
                 ...loginEnv,
+                ...providerModelEnv,
+                ...acpEnv,
               },
               command: config.agentCommands[provider],
               roBinds: config.fakeAgentRoBinds,
-              binds: loginDirs.map((d) => ({ host: d.host, sandbox: d.inside })),
+              binds: [...loginDirs.map((d) => ({ host: d.host, sandbox: d.inside })), ...acpBinds],
               pathPrefix: [ghBinAgent],
             })
 
@@ -738,9 +906,10 @@ export const AgentHarnessLive = Layer.effect(
               { file: launch.file, args: launch.args, cwd: launch.cwd, env: { ...launch.env } },
               {
                 seed: resumeSession === null ? null : (task.context ?? null),
+                provider,
                 queued: admission.queued,
                 conversation:
-                  provider === "openai"
+                  harness === "codex"
                     ? {
                         kind: "codex",
                         input: {
@@ -755,7 +924,21 @@ export const AgentHarnessLive = Layer.effect(
                           apiKey: keptBroker.OPENAI_API_KEY,
                         },
                       }
-                    : { kind: "claude", prompt },
+                    : harness === "acp"
+                      ? {
+                          kind: "acp",
+                          input: {
+                            prompt,
+                            provider,
+                            model: choice.model === undefined ? undefined : modelInfo(choice.model).acpModel,
+                            resumeSession,
+                            cwd: join(config.threadsDir, task.id),
+                            mcpUrl,
+                            mcpToken: lease.token,
+                            clientVersion: VERSION,
+                          },
+                        }
+                      : { kind: "claude", prompt },
               },
             )
           }).pipe(Effect.either)
@@ -803,7 +986,12 @@ export const AgentHarnessLive = Layer.effect(
               cwd: serverDir,
               env: { ...process.env },
             },
-            { seed: null, conversation: null, queued: null },
+            {
+              seed: null,
+              provider: run.provider ?? DEFAULT_MODEL_PROVIDER,
+              conversation: null,
+              queued: null,
+            },
           ).pipe(Effect.either)
           if (Either.isLeft(started)) {
             yield* shape.abort(run.id, started.left.message)
@@ -876,10 +1064,13 @@ export const AgentHarnessLive = Layer.effect(
  * The agent session a JSON output line names, and the provider that minted it, or null. Claude Code's stream-json
  * opens with `{"type":"system","subtype":"init","session_id":…}`. A Codex run's thread comes from its driver.
  */
-const sessionOf = (event: unknown): { readonly sessionId: string; readonly provider: ModelProvider } | null => {
+const sessionOf = (
+  event: unknown,
+  provider: ModelProvider,
+): { readonly sessionId: string; readonly provider: ModelProvider } | null => {
   if (typeof event !== "object" || event === null || !("type" in event)) return null
   if (event.type === "system" && "subtype" in event && event.subtype === "init" && "session_id" in event) {
-    return typeof event.session_id === "string" ? { sessionId: event.session_id, provider: "anthropic" } : null
+    return typeof event.session_id === "string" ? { sessionId: event.session_id, provider } : null
   }
   return null
 }

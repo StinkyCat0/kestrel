@@ -20,6 +20,7 @@ import {
   connectedModelProviders,
   harnessCommandPrefix,
   Paths,
+  providerHarness,
   resolveAgentChoice,
   type AgentEffort,
   type ContextUsage,
@@ -373,7 +374,8 @@ export function Composer({
   const triggerAllowed =
     trigger === "/" ||
     (trigger === "$" &&
-      (expectedProvider === "openai" || (activeRunId !== undefined && activeRunProvider === undefined)));
+      ((expectedProvider !== undefined && providerHarness(expectedProvider) === "codex") ||
+        (activeRunId !== undefined && activeRunProvider === undefined)));
   const slashQuery =
     taskId !== undefined && trigger !== undefined && triggerAllowed && view.caret <= commandTokenEnd
       ? visible.slice(1, commandTokenEnd)
@@ -389,8 +391,8 @@ export function Composer({
   // Like references, keep the active token available across that focus change.
   const slashMenuOpen =
     slashQuery !== undefined &&
-    (trigger !== "$" || commandProvider === "openai") &&
-    !dismissed;
+    (trigger !== "$" || (commandProvider !== undefined && providerHarness(commandProvider) === "codex")) &&
+    focused;
 
   // Codex lists its commands and skills on `/`, and only its skills on their native `$`.
   const commandMatches =
@@ -463,7 +465,7 @@ export function Composer({
     // Capture the DOM's current Markdown at the button press, not an earlier native bridge acknowledgement.
     const body = [chosenOption ?? "", next.markdown.trim()].filter(Boolean).join("\n\n");
     if (body === "" || pending) return;
-    void onSend({ text: body, model: model?.id, effort }).then(
+    void onSend({ text: body, model: model?.id, provider: model?.provider, effort }).then(
       (sent) => {
         editor.current?.clear();
         setText("");

@@ -13,11 +13,12 @@ import { Input } from "@/components/ui/input"
 import { SERVER_URL } from "@/config"
 import { errorText } from "@/util"
 
-/** Validates a managed box's name and URL the way the server does; a trailing slash is dropped first. */
-function parseFleetForm(name: string, url: string): CreateFleetBoxBody | null {
+/** Validates a managed box's name, URL and optional owner; a trailing slash is dropped first. */
+function parseFleetForm(name: string, url: string, owner: string): CreateFleetBoxBody | null {
   const result = Schema.decodeUnknownEither(CreateFleetBoxBody)({
     name: name.trim(),
     url: url.trim().replace(/\/+$/, ""),
+    owner: owner.trim() === "" ? null : owner.trim(),
   })
   return Either.isRight(result) ? result.right : null
 }
@@ -116,6 +117,7 @@ function FleetBoxRow({ box, onSecret }: { box: FleetBox; onSecret: (created: Cre
             <OnlineBadge online={health.data?.online} />
           </div>
           <span className="truncate font-mono text-xs text-muted-foreground">{box.url}</span>
+          {box.owner !== null && <span className="text-xs text-muted-foreground">pinned to @{box.owner}</span>}
         </div>
         <span className="text-xs text-muted-foreground">{box.users === 1 ? "1 user" : `${box.users} users`}</span>
       </div>
@@ -170,12 +172,14 @@ function AddFleetBoxForm({ onCreated }: { onCreated: (created: CreatedFleetBox) 
   const queryClient = useQueryClient()
   const [name, setName] = useState("")
   const [url, setUrl] = useState("")
+  const [owner, setOwner] = useState("")
   const [invalid, setInvalid] = useState(false)
   const create = useMutation({
     mutationFn: (body: CreateFleetBoxBody) => api.createFleetBox(body),
     onSuccess: (next) => {
       setName("")
       setUrl("")
+      setOwner("")
       void queryClient.invalidateQueries({ queryKey: keys.fleetBoxes })
       onCreated(next)
     },
@@ -183,7 +187,7 @@ function AddFleetBoxForm({ onCreated }: { onCreated: (created: CreatedFleetBox) 
 
   function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    const body = parseFleetForm(name, url)
+    const body = parseFleetForm(name, url, owner)
     setInvalid(body === null)
     if (body) create.mutate(body)
   }
@@ -213,6 +217,13 @@ function AddFleetBoxForm({ onCreated }: { onCreated: (created: CreatedFleetBox) 
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               className="min-w-0 flex-1"
+            />
+            <Input
+              aria-label="Pinned user"
+              placeholder="Owner (optional)"
+              value={owner}
+              onChange={(e) => setOwner(e.target.value)}
+              className="sm:w-44"
             />
             <Button type="submit" disabled={create.isPending}>
               Add box

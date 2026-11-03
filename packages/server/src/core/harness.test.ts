@@ -143,7 +143,68 @@ createInterface({ input: process.stdin })
       queued_turn_count: 0, result: "Queued answer finished." }), 4000)
   })
 `)
-  const { config, layer } = harnessLayer(root, cli)
+  const config: ServerConfig = {
+    port: 8897,
+    host: "127.0.0.1",
+    mcpBaseUrl: "http://127.0.0.1:8897",
+    dataDir: root,
+    stateFile: join(root, "state.json"),
+    mirrorsDir: join(root, "mirrors"),
+    threadsDir: join(root, "threads"),
+    shadowsDir: join(root, "shadows"),
+    runsDir: join(root, "runs"),
+    attachmentsDir: join(root, "attachments"),
+    homesDir: join(root, "homes"),
+    agentCommands: {
+      anthropic: [process.execPath, cli].map((path) => `'${path.replaceAll("\\", "/").replaceAll("'", "'\\''")}'`).join(" "),
+      openai: "",
+      openrouter: "",
+      zai: "",
+      deepseek: "",
+      minimax: "",
+      moonshot: "",
+      omp: "",
+      pi: "",
+      hermes: "",
+    },
+    fakeAgent: false,
+    fakeAgentRoBinds: [],
+    sandbox: "off",
+    sandboxPath: null,
+    sandboxSslCertFile: null,
+    systemd: null,
+    maxConcurrentRuns: 0,
+    relay: null,
+    direct: null,
+    toolkitsFlake: null,
+    taskDiskMax: 1024 ** 3,
+    desktopBundleMs: 0,
+    githubApiUrl: "https://api.github.com",
+  }
+  const configLayer = Layer.succeed(Config, config)
+  const dependencies = Layer.mergeAll(
+    configLayer,
+    StateLive.pipe(Layer.provide(Layer.merge(configLayer, WorkspaceLive))),
+    EventHubLive,
+    Layer.succeed(CredentialBroker, {
+      issue: () => Effect.succeed({ token: "test-only", env: {} }),
+      revoke: () => Effect.void,
+      grantForToken: () => Effect.succeed(null),
+      onRevoke: () => () => undefined,
+      upstreamKey: () => Effect.succeed(null),
+    }),
+    Layer.succeed(CliAuth, {
+      loggedInDirs: () => Effect.succeed([]),
+      status: () => Effect.succeed([]),
+      startLogin: () => Effect.die("unused"),
+      submitCode: () => Effect.die("unused"),
+      logout: () => Effect.void,
+      discoverCommands: () => Effect.succeed([]),
+      providerUsage: () => Effect.succeed([]),
+      useBankedReset: () => Effect.die("unused"),
+      shutdown: () => Effect.void,
+    }),
+  )
   try {
     await Effect.runPromise(Effect.gen(function* () {
       const store = yield* StateStore

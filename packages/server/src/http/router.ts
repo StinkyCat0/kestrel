@@ -285,7 +285,7 @@ export const makeRouter = (core: CoreShape, cliAuth: CliAuthShape, capabilities:
           Effect.flatMap(requestIsDev, (dev) =>
             signedIn((user) =>
               Effect.flatMap(jsonBody(SendMessageBody), (body) =>
-                core.sendMessage(user, id, body.text, { model: body.model, effort: body.effort }, body.attachments ?? [], dev),
+                core.sendMessage(user, id, body.text, { model: body.model, provider: body.provider, effort: body.effort }, body.attachments ?? [], dev),
               ),
             ),
           ),

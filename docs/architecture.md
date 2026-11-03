@@ -31,10 +31,56 @@ flowchart TB
     SANDBOX --> BROKER
     MCP --> DESKTOP
   end
-  BROKER --> MODEL["Model providers"]
-  PROTOCOL["packages/protocol<br/>shared schemas and types"] -.-> WEB
-  PROTOCOL -.-> CTRL
-  PROTOCOL -.-> BOX
+
+  subgraph CF["Cloudflare"]
+    subgraph CTRL["Worker kestrel: packages/control"]
+      AUTH["GitHub OAuth, sessions, allow-list<br/>auth.ts, providers.ts<br/>👤 Person 4"]
+      API["Control API<br/>/api and preview sessions<br/>api.ts, automations.ts<br/>👤 Person 4"]
+      HUB["Hub Durable Object<br/>users, sessions, secrets, preview tokens, fleet registry, legacy relay<br/>hub.ts<br/>👤 Person 4 + Jaren"]
+    end
+  end
+
+  GH["GitHub<br/>OAuth App kestrel-agent-app"]
+
+  subgraph PC["Jaren's PC: the box, packages/server"]
+    RELAY["Legacy relay client<br/>dials out over WSS<br/>relay/*<br/>👤 Jaren"]
+    REST["Box REST + WebSockets<br/>threads, checkouts, runs, diff, events<br/>http/*, core/service.ts<br/>👤 Jaren"]
+    HARN["Harness<br/>runs claude / other CLI agents<br/>core/harness.ts, config.ts<br/>👤 Person 3"]
+    MCP["MCP server /mcp/:taskId<br/>desktop_*, preview_open, workspace_exec, thread_*<br/>mcp/handler.ts<br/>👤 Person 3"]
+    BROKER["Credential broker<br/>per-run token to real model key<br/>broker/*<br/>👤 Jaren"]
+    SB["bwrap sandbox (strict, basic or off) in a systemd scope<br/>per-task and box-wide limits<br/>agent, exec, desktop apps<br/>sandbox/*<br/>👤 Jaren"]
+    DESK["Desktop manager<br/>weston + Xwayland (host GPU) + xdamage-capture → ffmpeg (damage-driven VFR; NVENC next), WebRTC next<br/>desktop/*<br/>👤 Jaren"]
+    STATE[("state.json, thread workspaces,<br/>repo mirrors<br/>core/state.ts")]
+  end
+
+  LLM["Model provider APIs"]
+
+  APP -->|HTTPS /api, WSS events| API
+  APP -->|sign in| AUTH
+  AUTH <-->|OAuth code to token| GH
+  API -->|list repos| GH
+  API --> HUB
+  HUB <-->|legacy relay frames over WSS| RELAY
+  VIEW -->|sandboxed preview + short-lived token| HUB
+  VIEW <-->|desktop stream WS| HUB
+  APP -->|direct, box token: managed or own box| REST
+  VIEW -.->|planned: WebRTC direct| DESK
+  RELAY --> REST
+  REST -->|loopback proxy in task netns| SB
+  REST --> HARN
+  REST --> STATE
+  HARN -->|spawn| SB
+  SB -->|tool calls| MCP
+  SB -->|model calls with run token| BROKER
+  BROKER --> LLM
+  MCP --> DESK
+  MCP --> REST
+  DESK --> SB
+
+  PROTO["packages/protocol<br/>shared schemas: relay frames, REST bodies, events<br/>👤 everyone reviews"]
+  PROTO -.- APP
+  PROTO -.- CTRL
+  PROTO -.- PC
 ```
 
 The diagram shows the major paths, not every endpoint. The legacy relay remains for users without a managed or directly connected box. Desktop and preview traffic can also use it. Protocol schemas are shared across packages; changes to them affect all consumers.

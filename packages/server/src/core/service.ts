@@ -34,8 +34,12 @@ import {
   type CreateTaskBody,
   type Delegation,
   type HarnessCommands,
+  agentChoiceProblem,
+  agentChoiceProvider,
+  harnessIdOfProvider,
   modelInfo,
   type FileRoot,
+  providerHarness,
   providerModels,
 } from "@cloudagents/protocol"
 import { CliAuth } from "../cliauth"
@@ -1243,7 +1247,9 @@ export const CoreLive = Layer.effect(
     ): Effect.Effect<SendMessageResponse, NotFound | Conflict | BadRequest | InternalError> =>
       Effect.gen(function* () {
         yield* ownedTask(user, taskId)
-        const provider = choice.model === undefined ? DEFAULT_MODEL_PROVIDER : modelInfo(choice.model).provider
+        const choiceProblem = agentChoiceProblem(choice)
+        if (choiceProblem !== null) return yield* Effect.fail(new BadRequest({ message: choiceProblem }))
+        const provider = agentChoiceProvider(choice)
         if (text.trim() === "" && attachmentIds.length === 0) {
           return yield* Effect.fail(new BadRequest({ message: "message text or an attachment is required" }))
         }
@@ -1377,6 +1383,7 @@ export const CoreLive = Layer.effect(
               endedAt: null,
               exitCode: null,
               provider,
+              harness: harnessIdOfProvider(provider),
               ...(choice.model === undefined ? {} : { model: choice.model }),
               effort: choice.effort ?? null,
             }
@@ -1490,7 +1497,7 @@ export const CoreLive = Layer.effect(
         DEFAULT_MODEL_PROVIDER
       if (provider === DEFAULT_MODEL_PROVIDER) return {}
       const model = providerModels(provider).find((m) => m.shownByDefault)?.id
-      return model === undefined ? {} : { model }
+      return model === undefined ? { provider } : { provider, model }
     }
 
     const sendToThread: CoreShape["sendToThread"] = (fromTaskId, toTaskId, text) =>
@@ -1932,10 +1939,8 @@ export const CoreLive = Layer.effect(
           const running = state.runs.find((r) => r.taskId === taskId && r.status === "running")
           const session = running === undefined ? undefined : state.runSessions.find((s) => s.runId === running.id)
           const provider = commandProvider(running, session, model)
-          const cliProvider: CliProvider = provider === "anthropic" ? "claude-cli" : "codex-cli"
-          // Started where the agent starts, so the list holds the project commands and skills of its checkout.
-          const workspace = threadDirOf(task.id)
-          const commands = yield* cliAuth.discoverCommands(user, cliProvider, workspace, agentCwd(workspace, task))
+          const cliProvider: CliProvider = providerHarness(provider) === "codex" ? "codex-cli" : "claude-cli"
+          const commands = yield* cliAuth.discoverCommands(user, cliProvider, threadDirOf(task.id))
           return { provider, commands }
         }),
 
