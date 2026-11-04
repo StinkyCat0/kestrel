@@ -180,7 +180,9 @@ function ModelListRow({ provider, connected }: { provider: ModelProviderInfo; co
         {provider.connections.length === 0 ? (
           <div className="flex items-center gap-2">
             <strong>{provider.name}</strong>
-            <Badge variant="neutral">no sign-in needed</Badge>
+            <Badge variant="neutral">
+              {provider.id === "opencode" ? "no sign-in needed" : "harness login or DeepSeek key"}
+            </Badge>
           </div>
         ) : (
           <ConnectionHeader label={provider.name} connected={connected} />
@@ -254,7 +256,7 @@ function FreeHarnessRow({ connection }: { connection: Connection }) {
       <ConnectionHeader label={connection.label} connected={connection.available} />
       <span className="text-xs text-muted-foreground">
         {connection.available
-          ? `Installed on the box. Free models need no sign-in${provider?.id === "opencode" ? " or Go key" : ""}. ${tools}`
+          ? `Installed on the box. ${provider?.id === "opencode" ? "Free models need no sign-in or Go key." : "Runs use the harness's own login, or the DeepSeek API key."} ${tools}`
           : `${connection.error ?? `${name} is not installed on this box`}.${provider?.setup === undefined ? "" : ` Install it with: ${provider.setup}.`}`}
       </span>
     </div>

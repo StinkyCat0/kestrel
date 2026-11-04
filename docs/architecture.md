@@ -117,6 +117,14 @@ was reverted in #239 (extra harness setup and bundled key-dependent model choice
 need); provider and harness support is restored without the picker. Kestrel's constrained customization leaves Pi's
 ACP adapter without MCP tools.
 
+OMP, Pi and Hermes catalog models are DeepSeek's. Their runs get the broker's `harness` grant, which authorizes only the
+user's DeepSeek connection and exports `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` at the broker's OpenAI-format
+`deepseek-openai` route; no real key enters the sandbox. Each harness also mounts its per-user harness home
+(`<dataDir>/users/<login>/harnesses/<harness>` at `~/.omp`, `~/.pi` or `~/.hermes`), where the operator's own setup and
+sessions live; a run with neither a DeepSeek connection nor a configured harness home is refused before its CLI starts.
+Pi's adapter implements `session/load` (not `session/resume`), so its runs reopen a recorded session with that method
+and the replayed conversation updates are kept out of the new run's transcript.
+
 At startup, historical runs from #217 keep their tasks, messages and run records. A box that ran the #239 retirement
 already cleared their obsolete provider/model/harness routing metadata and resume targets; this integration no longer
 strips those fields, so new OMP, Pi and Hermes runs persist normally and their sessions stay resumable. State

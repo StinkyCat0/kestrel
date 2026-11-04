@@ -70,7 +70,7 @@ function FreeHarnessRow({ connection }: { connection: Connection }) {
     <ConnectionRowFrame connection={connection}>
       <Text style={connectionStyles.muted}>
         {connection.available
-          ? `Installed on the box. Free models need no sign-in${provider?.id === "opencode" ? " or Go key" : ""}. ${tools}`
+          ? `Installed on the box. ${provider?.id === "opencode" ? "Free models need no sign-in or Go key." : "Runs use the harness's own login, or the DeepSeek API key."} ${tools}`
           : `${connection.error ?? `${name} is not installed on this box`}.${provider?.setup === undefined ? "" : ` Install it with: ${provider.setup}.`}`}
       </Text>
     </ConnectionRowFrame>

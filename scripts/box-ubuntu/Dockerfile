@@ -2,8 +2,13 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# Node comes from NodeSource, not Ubuntu's nodejs (18.19): Pi's CLI needs Node >= 22.19. Install it before the npm
+# globals below, and keep npm from the same distribution.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bubblewrap git curl ca-certificates nodejs npm python3 python3-venv \
+ && apt-get install -y --no-install-recommends bubblewrap git curl ca-certificates gnupg python3 python3-venv \
+ && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' \
  && rm -rf /var/lib/apt/lists/*
 
 RUN (userdel -r ubuntu 2>/dev/null || true) \
@@ -29,7 +34,9 @@ RUN curl -fsSL https://omp.sh/install | sh
 # Hermes Agent: its own installer; the first run/setup pulls its runtime
 RUN curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 
-RUN claude --version && codex --version && opencode --version && agy --version && omp --version && pi-acp --version && hermes --version \
+RUN node --version && node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' \
+ && claude --version && codex --version && opencode --version && agy --version && omp --version \
+ && pi-acp --version && pi --version && hermes --version \
  && readlink -f "$(command -v claude)" && readlink -f "$(command -v codex)" && readlink -f "$(command -v opencode)" \
  && readlink -f "$(command -v agy)" && readlink -f "$(command -v omp)" && readlink -f "$(command -v pi-acp)" \
- && readlink -f "$(command -v hermes)"
+ && readlink -f "$(command -v pi)" && readlink -f "$(command -v hermes)"

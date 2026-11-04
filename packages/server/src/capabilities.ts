@@ -150,6 +150,13 @@ export const harnessAvailability = (
     const install = info.setup === undefined ? "" : `; install it with: ${info.setup}`
     return { available: false, error: `its CLI (${binary}) is not installed on this box${install}` }
   }
+  // An adapter that starts the agent itself (Pi's `pi-acp` runs `pi`) needs both binaries in a run.
+  for (const required of MODEL_HARNESS[provider].requires ?? []) {
+    if (probe.which(required) === null) {
+      const install = info.setup === undefined ? "" : `; install it with: ${info.setup}`
+      return { available: false, error: `its CLI (${binary}) needs ${required}, which is not installed on this box${install}` }
+    }
+  }
   const minimum = MODEL_HARNESS[provider].minVersion
   if (minimum !== null && !meetsMinimum(probe.version(path), minimum)) {
     return { available: false, error: `its CLI (${binary}) must be version ${minimum[0]}.${minimum[1]} or newer` }

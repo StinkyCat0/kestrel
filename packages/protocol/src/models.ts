@@ -161,7 +161,7 @@ const OC_LOW_TO_MAX: readonly AgentEffort[] = ["low", "medium", "high", "xhigh",
  * efforts are what its ACP `effort` option offers per model; its free models need no sign-in, and OpenCode rotates
  * them, so the list follows its own. OpenCode Go's are the Go plan's models that no other provider here runs (its
  * Claude, GPT and Gemini models are left to theirs), and none of its free or contributor ones. OMP, Pi and Hermes
- * publish no effort scale Kestrel maps, so their free models list none.
+ * publish no effort scale Kestrel maps, so their models list none.
  */
 export const AGENT_MODELS: readonly ModelInfo[] = [
   { id: "claude-fable-5-1", provider: "anthropic", name: "Claude Fable 5.1", efforts: CLAUDE_ALL, shownByDefault: true },
@@ -245,7 +245,8 @@ export const AGENT_MODELS: readonly ModelInfo[] = [
   // What a signed-in Google account's Antigravity CLI offers, with its `thought_level` option.
   { id: "gemini-3.8-flash", provider: "google", name: "Gemini 3.8 Flash", efforts: ["low", "medium", "high"], shownByDefault: true },
   // OMP, Pi and Hermes run ACP and name models in their own provider namespaces; `acpModel` is the value their
-  // `model` config option takes. Their free models need no connection: the box only has to have the harness CLI.
+  // `model` config option takes. Their models are DeepSeek's: a run uses the harness's own login from its per-user
+  // harness home, or the DeepSeek key from Connections through the broker.
   { id: "omp-deepseek-flash", provider: "omp", name: "DeepSeek Flash", efforts: [], shownByDefault: true, acpModel: "deepseek/deepseek-flash" },
   { id: "omp-deepseek-pro", provider: "omp", name: "DeepSeek V4 Pro", efforts: [], shownByDefault: true, acpModel: "deepseek/deepseek-v4-pro" },
   { id: "pi-deepseek-flash", provider: "pi", name: "DeepSeek Flash", efforts: [], shownByDefault: true, acpModel: "deepseek/deepseek-flash" },
@@ -288,9 +289,10 @@ export const MODEL_PROVIDERS: readonly ModelProviderInfo[] = [
   // OpenCode Go runs on the same OpenCode CLI (2.1), but needs the Go plan's key.
   { id: "opencode-go", name: "OpenCode Go", connections: ["opencode-go"] },
   { id: "google", name: "Google", connections: ["antigravity-cli"] },
-  // Standalone ACP harnesses: their own CLI runs their free models, so they need no connection, only the CLI.
+  // Standalone ACP harnesses: the box must have their CLI, and their runs use the harness's own login from its
+  // per-user harness home or the DeepSeek key from Connections through the broker's harness route.
   { id: "omp", name: "OMP", connections: [], setup: "curl -fsSL https://omp.sh/install | sh" },
-  // Pi's ACP adapter advertises no MCP support, so Kestrel's tools cannot reach a Pi run.
+  // Pi's ACP adapter advertises no MCP support, so Kestrel's tools cannot reach a Pi run. Its CLI needs Node 22.19+.
   { id: "pi", name: "Pi", connections: [], setup: "npm install -g @earendil-works/pi-coding-agent pi-acp", mcp: false },
   { id: "hermes", name: "Hermes", connections: [], setup: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash" },
 ]

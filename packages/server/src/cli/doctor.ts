@@ -64,7 +64,7 @@ export const linuxChecks = async (): Promise<readonly Check[]> => {
   // agent CLIs it finds there).
   const sandboxed = (config ?? DEFAULT_CONFIG).sandbox === "basic"
   const home = mkdtempSync(join(tmpdir(), "kestrel-doctor-"))
-  const agents = ["claude", "codex", "opencode", "agy", "omp", "pi-acp", "hermes"].map((name) => {
+  const agents = ["claude", "codex", "opencode", "agy", "omp", "pi-acp", "pi", "hermes"].map((name) => {
     if (onPath(name) === null) return { name, ok: false, detail: "not on PATH" }
     const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home }
     const run = sandboxed

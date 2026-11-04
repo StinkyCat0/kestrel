@@ -6,16 +6,28 @@ There is no separate per-thread harness picker: a model belongs to exactly one p
 where the run goes.
 
 OMP, Pi and Hermes are **standalone ACP harnesses**: their own CLI speaks the Agent Client Protocol over stdio, so the
-box must have that CLI before the harness is offered. They need no connection key, and each run's model comes from the
-thread's own selection.
+box must have that CLI before the harness is offered. Their runs use the harness's own login from its per-user harness
+home, or the user's DeepSeek connection through the broker; either way each run's model comes from the thread's own
+selection.
 
 ## Credentials and sessions
 
 - Claude Code and Codex use their connected API keys through Kestrel's credential broker, or the user's corresponding
   CLI login. Gateway runs use only their selected provider's broker route, not the user's Claude or ChatGPT login.
 - OpenCode's free models need no connection, Go key or vendor broker credential. Their sessions live in the thread home.
-- OMP, Pi and Hermes runs reach models through the broker's **vendors** channel: both the Anthropic and OpenAI broker
-  routes stay open, while the run holds only its per-run token. No CLI login directory is mounted for them.
+- OMP, Pi and Hermes runs reach models through the broker's **harness** channel. Every catalog model these harnesses
+  offer is DeepSeek's, so the channel serves DeepSeek's OpenAI-compatible API at
+  `/broker/<run token>/deepseek-openai` and exports `DEEPSEEK_API_KEY` (the run's token) and `DEEPSEEK_BASE_URL`; the
+  token authorizes only the user's DeepSeek connection, not the two vendor APIs. No real key enters the sandbox.
+- Each harness's own settings, provider definitions and sessions live in a per-user harness home below; a run mounts
+  that directory, so an operator can set the harness up once per user (`HOME=<harness home> omp login`, `pi`,
+  `hermes setup`) and the harness's own free login takes precedence over the broker env. Without such a setup the run
+  needs the user's DeepSeek key from Settings › Connections, and a send without either fails before the CLI starts
+  with a setup error naming both options. The broker env covers harnesses that read `DEEPSEEK_BASE_URL`; a harness
+  whose adapter pins the provider URL (Pi's) needs its harness-home provider configuration, or a command override that
+  points it at `DEEPSEEK_BASE_URL`.
+- The harness home is per user and only that user's runs mount it; it is never the operator's `~/.omp`, `~/.pi` or
+  `~/.hermes`. Keep Kestrel connection keys out of it: those still go through the broker.
 - OpenCode Go uses its own saved key and credential/session directory. Only a Go run mounts that directory and receives
   its `XDG_DATA_HOME`; native vendor, Google and free OpenCode runs do not receive the Go login.
 - Free OpenCode, Go and Google runs receive MCP-only run tokens: no vendor broker environment and no vendor-authorized
@@ -72,12 +84,22 @@ binaries are found in `$HOME` and bound into the run; under `strict` they must b
 | OpenCode free | OpenCode 2.0+ (`npm i -g @opencode/cli`) | thread home, no key | `CLOUDAGENTS_OPENCODE_COMMAND` |
 | OpenCode Go | OpenCode 2.1+ | `<dataDir>/users/<login>/opencode-go`, isolated from free models | `CLOUDAGENTS_OPENCODE_GO_COMMAND` |
 | Google | Antigravity CLI 1.5+ (`agy`, pinned by the flake) | `<dataDir>/users/<login>/antigravity` | `CLOUDAGENTS_GOOGLE_COMMAND` |
-| OMP | `curl -fsSL https://omp.sh/install \| sh` (`omp` on PATH) | thread home, no key | `CLOUDAGENTS_OMP_COMMAND` |
-| Pi | `npm install -g @earendil-works/pi-coding-agent pi-acp` | thread home, no key | `CLOUDAGENTS_PI_COMMAND` |
-| Hermes | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` | thread home, no key | `CLOUDAGENTS_HERMES_COMMAND` |
+| OMP | `curl -fsSL https://omp.sh/install \| sh` (`omp` on PATH) | `<dataDir>/users/<login>/harnesses/omp` (`~/.omp` in the run), or the broker's DeepSeek route | `CLOUDAGENTS_OMP_COMMAND` |
+| Pi | `npm install -g @earendil-works/pi-coding-agent pi-acp`, on **Node 22.19+** | `<dataDir>/users/<login>/harnesses/pi` (`~/.pi` in the run), or the broker's DeepSeek route | `CLOUDAGENTS_PI_COMMAND` |
+| Hermes | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` | `<dataDir>/users/<login>/harnesses/hermes` (`~/.hermes` in the run), or the broker's DeepSeek route | `CLOUDAGENTS_HERMES_COMMAND` |
 
 `dataDir` is `CLOUDAGENTS_DATA_DIR`, or `.data` under the repository by default. `opencode-ai` and
 opencode.ai/install are OpenCode 1 and do not satisfy these requirements.
+
+Kestrel creates the harness home (owner-only) and binds it read-write at the harness's config path in the run, so
+settings and the session store survive between runs of that user (`CLOUDAGENTS_SANDBOX=off` symlinks it into the task
+home instead). Purely sandboxed runs resume sessions from that directory, so session continuation for OMP, Pi and
+Hermes is recorded as `cli-login`.
+
+Pi's CLI requires Node ≥ 22.19 (`node:module`'s `enableCompileCache`); Ubuntu 24.04 ships Node 18. `kestrel-box
+install` on macOS and the `scripts/box-ubuntu/Dockerfile` image both install Node 22 from NodeSource before the npm
+globals, and the image verifies `pi --version` and `node --version`. Pi is offered only when both `pi-acp` and `pi`
+are on the run's PATH.
 
 The ACP commands are `omp acp`, `pi-acp`, `hermes acp`, `opencode acp` and `agy acp --gemini-dir "$AGY_GEMINI_DIR"`.
 Each of OMP, Pi and Hermes offers two free models, DeepSeek Flash and DeepSeek V4 Pro, named in its own namespace:

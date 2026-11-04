@@ -3,7 +3,7 @@ import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { Effect } from "effect"
 import { MODEL_PROVIDERS, providerModels, type RelayCredentials } from "@cloudagents/protocol"
-import { BROKER_PROVIDERS, BROKER_UPSTREAMS, brokerEnv, credentialFor, type CredentialBrokerShape } from "./index"
+import { BROKER_PROVIDERS, BROKER_UPSTREAMS, HARNESS_UPSTREAMS, brokerEnv, brokerUpstream, credentialFor, type CredentialBrokerShape } from "./index"
 import { handleBroker } from "./handler"
 
 const BASE = "http://127.0.0.1:8787/broker/run-token"
@@ -39,13 +39,33 @@ describe("broker provider mapping", () => {
     }
   })
 
-  test("a standalone ACP harness's vendors channel keeps both vendor APIs open", () => {
+  test("a vendor run's vendors channel keeps both vendor APIs open", () => {
     expect(brokerEnv("vendors", BASE, "t")).toEqual({
       ANTHROPIC_BASE_URL: `${BASE}/anthropic`,
       ANTHROPIC_API_KEY: "t",
       OPENAI_BASE_URL: `${BASE}/openai/v1`,
       OPENAI_API_KEY: "t",
     })
+  })
+
+  test("a standalone ACP harness's channel points its DeepSeek provider at the OpenAI-format route", () => {
+    expect(brokerEnv("harness", BASE, "t")).toEqual({
+      DEEPSEEK_API_KEY: "t",
+      DEEPSEEK_BASE_URL: `${BASE}/deepseek-openai`,
+    })
+    // The Anthropic route stays what Claude Code uses; the harness route is DeepSeek's OpenAI-compatible API under
+    // the same DeepSeek credential.
+    expect(brokerUpstream("deepseek")).toEqual({
+      base: "https://api.deepseek.com/anthropic",
+      keyHeader: "bearer",
+      provider: "deepseek",
+    })
+    expect(brokerUpstream("deepseek-openai")).toEqual({
+      base: "https://api.deepseek.com/v1",
+      keyHeader: "bearer",
+      provider: "deepseek",
+    })
+    expect(brokerUpstream("not-a-route")).toBeNull()
   })
 
   test.each(["openrouter", "deepinfra"] as const)(
@@ -132,6 +152,61 @@ describe("broker provider mapping", () => {
       await closed.promise
       upstream.stop(true)
       BROKER_UPSTREAMS.anthropic = previous
+    }
+  })
+
+  test("the DeepSeek harness route forwards the real key, and a vendor-only grant cannot use it", async () => {
+    const seen: Array<{ path: string; headers: Headers }> = []
+    const upstream = Bun.serve({
+      port: 0,
+      fetch(req) {
+        seen.push({ path: new URL(req.url).pathname + new URL(req.url).search, headers: req.headers })
+        return new Response("ok")
+      },
+    })
+    const previous = HARNESS_UPSTREAMS["deepseek-openai"]
+    HARNESS_UPSTREAMS["deepseek-openai"] = { ...previous, base: `http://127.0.0.1:${upstream.port}/v1` }
+    const broker: CredentialBrokerShape = {
+      issue: () => Effect.die("unused"),
+      revoke: () => Effect.void,
+      grantForToken: (token) =>
+        Effect.succeed({
+          runId: "run",
+          user: "octocat",
+          providers: token === "harness" ? (["deepseek"] as const) : (["anthropic", "openai"] as const),
+        }),
+      onRevoke: () => () => undefined,
+      upstreamKey: () => Effect.succeed("real-key"),
+    }
+    const box = createServer((req, res) => void handleBroker(broker, req, res))
+    const listening = Promise.withResolvers<void>()
+    box.listen(0, "127.0.0.1", listening.resolve)
+    await listening.promise
+    try {
+      const port = (box.address() as AddressInfo).port
+      const allowed = await fetch(`http://127.0.0.1:${port}/broker/harness/deepseek-openai/chat/completions?beta=1`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer client" },
+        body: "{}",
+      })
+      expect(await allowed.text()).toBe("ok")
+      expect(seen).toHaveLength(1)
+      expect(seen[0]?.path).toBe("/v1/chat/completions?beta=1")
+      expect(seen[0]?.headers.get("authorization")).toBe("Bearer real-key")
+      expect(seen[0]?.headers.get("x-api-key")).toBeNull()
+
+      const denied = await fetch(`http://127.0.0.1:${port}/broker/vendor/deepseek-openai/chat/completions`, {
+        method: "POST",
+        body: "{}",
+      })
+      expect(denied.status).toBe(403)
+      expect(seen).toHaveLength(1)
+    } finally {
+      const closed = Promise.withResolvers<void>()
+      box.close(() => closed.resolve())
+      await closed.promise
+      upstream.stop(true)
+      HARNESS_UPSTREAMS["deepseek-openai"] = previous
     }
   })
 

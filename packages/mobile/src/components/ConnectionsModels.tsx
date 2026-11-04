@@ -65,7 +65,9 @@ function ModelRow({ provider, connected, divided }: RowProps) {
         <View style={styles.titleBlock}>
           <Text style={styles.label}>{provider.name}</Text>
           {provider.connections.length === 0 ? (
-            <Badge variant="neutral">no sign-in needed</Badge>
+            <Badge variant="neutral">
+              {provider.id === "opencode" ? "no sign-in needed" : "harness login or DeepSeek key"}
+            </Badge>
           ) : (
             <Badge variant={connected ? "success" : "neutral"}>
               {connected ? "connected" : "not connected"}

@@ -70,9 +70,10 @@ test("a fake-agent box plays every harness itself", () => {
 
 test("standalone ACP harnesses are offered by their own binary", () => {
   expect(availableHarnesses(box, probe({ omp: "omp 18.12.6" }))).toEqual(["omp"])
-  expect(availableHarnesses(box, probe({ "pi-acp": "pi-acp 0.0.34" }))).toEqual(["pi"])
+  // Pi needs its adapter and the agent it starts; either alone cannot run a turn.
+  expect(availableHarnesses(box, probe({ "pi-acp": "pi-acp 0.0.34", pi: "0.0.34" }))).toEqual(["pi"])
   expect(availableHarnesses(box, probe({ hermes: "hermes 0.8.0" }))).toEqual(["hermes"])
-  expect(availableHarnesses(box, probe({ omp: "omp 18.12.6", "pi-acp": "pi-acp 0.0.34", hermes: "hermes 0.8.0" }))).toEqual([
+  expect(availableHarnesses(box, probe({ omp: "omp 18.12.6", "pi-acp": "pi-acp 0.0.34", pi: "0.0.34", hermes: "hermes 0.8.0" }))).toEqual([
     "omp", "pi", "hermes",
   ])
 })
@@ -85,5 +86,13 @@ test("a missing standalone harness names its install command", () => {
   expect(harnessAvailability("omp", box, probe({}))).toEqual({
     available: false,
     error: "its CLI (omp) is not installed on this box; install it with: curl -fsSL https://omp.sh/install | sh",
+  })
+})
+
+test("Pi's adapter is not enough without the pi agent it starts", () => {
+  expect(availableHarnesses(box, probe({ "pi-acp": "pi-acp 0.0.34" }))).toEqual([])
+  expect(harnessAvailability("pi", box, probe({ "pi-acp": "pi-acp 0.0.34" }))).toEqual({
+    available: false,
+    error: "its CLI (pi-acp) needs pi, which is not installed on this box; install it with: npm install -g @earendil-works/pi-coding-agent pi-acp",
   })
 })

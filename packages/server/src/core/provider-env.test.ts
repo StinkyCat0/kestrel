@@ -82,6 +82,12 @@ describe("per-provider run environment", () => {
     expect(credentialFor(creds, "openrouter")).toBeNull()
   })
 
+  test("Pi resumes with session/load and needs both of its binaries; OMP and Hermes use session/resume", () => {
+    expect(MODEL_HARNESS.pi).toMatchObject({ acpResume: "session/load", requires: ["pi"] })
+    expect(MODEL_HARNESS.omp).not.toHaveProperty("acpResume")
+    expect(MODEL_HARNESS.hermes).not.toHaveProperty("acpResume")
+  })
+
   test("DeepInfra runs Claude Code through the broker's DeepInfra route", () => {
     // Its Anthropic-compatible endpoint speaks the Messages API, so the claude harness carries it like the gateways.
     expect(MODEL_HARNESS.deepinfra).toEqual({
