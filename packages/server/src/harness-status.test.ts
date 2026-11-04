@@ -11,6 +11,7 @@ const installed = (versions: Record<string, string> = {}): HarnessProbe => ({
 const commands = {
   anthropic: "claude -p",
   openai: "codex app-server",
+  openrouter: "claude -p",
   opencode: `OPENCODE_CONFIG_CONTENT='{"share": "disabled", "update": "disable"}' opencode acp`,
   omp: "omp acp",
   pi: "pi-acp",
