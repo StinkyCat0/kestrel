@@ -11,6 +11,7 @@ export const ModelProvider = Schema.Literal(
   "openrouter",
   "zai",
   "deepseek",
+  "minimax",
   "opencode",
   "omp",
   "pi",
@@ -95,6 +96,7 @@ export const AgentModel = Schema.Literal(
   "glm-5.3-flash[1m]",
   "deepseek-flash[1m]",
   "deepseek-v4-pro",
+  "MiniMax-M3.1-Flash[1m]",
   "opencode/big-pickle",
   "opencode/glm-5.3-flash-free",
   "opencode/deepseek-v4.1-flash-free",
@@ -171,6 +173,7 @@ export const AGENT_MODELS: readonly ModelInfo[] = [
   { id: "glm-5.3-flash[1m]", provider: "zai", name: "GLM-5.3 Flash", efforts: [], shownByDefault: false, compactWindow: 1_000_000 },
   { id: "deepseek-flash[1m]", provider: "deepseek", name: "DeepSeek Flash", efforts: CLAUDE_NO_XHIGH, shownByDefault: true, compactWindow: 786_432 },
   { id: "deepseek-v4-pro", provider: "deepseek", name: "DeepSeek V4 Pro", efforts: CLAUDE_NO_XHIGH, shownByDefault: false },
+  { id: "MiniMax-M3.1-Flash[1m]", provider: "minimax", name: "MiniMax M3.1 Flash", efforts: CLAUDE_ALL, shownByDefault: true, compactWindow: 524_288 },
   // OpenCode's catalog id is the value its ACP `model` config option takes.
   { id: "opencode/big-pickle", provider: "opencode", name: "Big Pickle", efforts: [], shownByDefault: true },
   { id: "opencode/glm-5.3-flash-free", provider: "opencode", name: "GLM-5.3-Flash Free", efforts: OC_LOW_HIGH_MAX, shownByDefault: true },
@@ -219,6 +222,7 @@ export const MODEL_PROVIDERS: readonly ModelProviderInfo[] = [
   { id: "openrouter", name: "OpenRouter", harness: "claude", connections: ["openrouter"], auth: "api-key", mcp: true },
   { id: "zai", name: "Z.ai", harness: "claude", connections: ["zai"], auth: "api-key", mcp: true },
   { id: "deepseek", name: "DeepSeek", harness: "claude", connections: ["deepseek"], auth: "api-key", mcp: true },
+  { id: "minimax", name: "MiniMax", harness: "claude", connections: ["minimax"], auth: "api-key", mcp: true },
   // OpenCode's free models need no connection: its own CLI runs them, so the box has to have it (OpenCode 2).
   { id: "opencode", name: "OpenCode", harness: "acp", connections: [], standalone: true, setup: "npm i -g @opencode/cli", auth: "harness-login", mcp: true },
   { id: "omp", name: "OMP", harness: "acp", connections: [], standalone: true, setup: "omp login, run in its harness home", auth: "harness-login", mcp: true },
