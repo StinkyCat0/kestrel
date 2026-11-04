@@ -63,6 +63,7 @@ import {
 import { useShownModels } from "@/hooks/useShownModels"
 import { useStoredChoice } from "@/hooks/useStoredChoice"
 import { useStoredDraft } from "@/hooks/useStoredDraft"
+import { usePromptHistory } from "@/hooks/usePromptHistory"
 import { cn } from "@/lib/utils"
 import { errorText } from "@/util"
 import { ContextBar } from "./ContextBar"
@@ -453,6 +454,7 @@ export function Composer({
   repos = [],
 }: Props) {
   const [text, setText] = useStoredDraft(draftKey)
+  const promptHistory = usePromptHistory(draftKey)
   const [view, setView] = useState<ComposerEditorView>(() => composerViewOf(text))
   const [files, setFiles] = useState<readonly File[]>([])
   const [fileError, setFileError] = useState<string>()
@@ -641,6 +643,7 @@ export function Composer({
     const message = [chosenOption ?? "", text.trim(), elementsText(elements)].filter((part) => part !== "").join("\n\n")
     onSend({ text: message, model: model?.id, effort }, files).then(
       (sent) => {
+        promptHistory.remember(text.trim())
         setText("")
         onElementsChange?.([])
         setFiles([])
@@ -717,6 +720,45 @@ export function Composer({
       const start = chosenIndex ?? (delta === 1 ? -1 : askOptions.length)
       setChoice({ askId: ask.id, index: (start + delta + askOptions.length) % askOptions.length })
       return
+    }
+    if (
+      !composing && !slashMenuOpen && !referenceMenuOpen && !ask &&
+      !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey &&
+      (e.key === "ArrowUp" || e.key === "ArrowDown")
+    ) {
+      const current = editor.current?.readView()
+      const selection = window.getSelection()
+      // An unchanged recall keeps browsing at the end, even when it spans visual lines.
+      // Ordinary drafts keep native Up movement; Range geometry also detects soft wrapping.
+      const continuingHistory = current !== undefined &&
+        promptHistory.isBrowsing(current.markdown) && current.caret === current.plain.length
+      let atHistoryBoundary = continuingHistory || (current !== undefined &&
+        (e.key === "ArrowUp" ? current.caret === 0 : current.caret === current.plain.length))
+      if (current && !continuingHistory && !current.plain.includes("\n") && e.key === "ArrowUp" &&
+        current.caret === current.plain.length && selection?.isCollapsed) {
+        const range = document.createRange()
+        range.selectNodeContents(e.currentTarget)
+        const rects = range.getClientRects()
+        const first = rects[0]
+        atHistoryBoundary = first === undefined
+        if (first !== undefined) {
+          atHistoryBoundary = true
+          for (const rect of rects) {
+            if (rect.height > 0 && (rect.top >= first.bottom || rect.bottom <= first.top)) {
+              atHistoryBoundary = false
+              break
+            }
+          }
+        }
+      }
+      if (current && selection?.isCollapsed && atHistoryBoundary) {
+        const recalled = promptHistory.navigate(e.key === "ArrowUp" ? -1 : 1, current.markdown)
+        if (recalled !== undefined) {
+          e.preventDefault()
+          setAutocompleteDismissed(true)
+          setText(recalled)
+        }
+      }
     }
     if (e.key === "Enter" && !e.shiftKey && !composing) {
       e.preventDefault()
