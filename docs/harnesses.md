@@ -1,19 +1,28 @@
 # Agent harnesses
 
 A thread's model selects its provider's CLI: Claude Code for Anthropic and Anthropic-compatible gateways, Codex for
-OpenAI, OpenCode for its free and Go models, and Antigravity CLI for Google. There is no separate per-thread harness
-picker. OMP, Pi and Hermes are retired; see [the scope decision and historical-state migration](architecture.md#agent-execution-and-data).
+OpenAI, OpenCode for its free and Go models, Antigravity CLI for Google, and OMP, Pi or Hermes for their own models.
+There is no separate per-thread harness picker: a model belongs to exactly one provider, and that provider's harness is
+where the run goes.
+
+OMP, Pi and Hermes are **standalone ACP harnesses**: their own CLI speaks the Agent Client Protocol over stdio, so the
+box must have that CLI before the harness is offered. They need no connection key, and each run's model comes from the
+thread's own selection.
 
 ## Credentials and sessions
 
 - Claude Code and Codex use their connected API keys through Kestrel's credential broker, or the user's corresponding
   CLI login. Gateway runs use only their selected provider's broker route, not the user's Claude or ChatGPT login.
 - OpenCode's free models need no connection, Go key or vendor broker credential. Their sessions live in the thread home.
+- OMP, Pi and Hermes runs reach models through the broker's **vendors** channel: both the Anthropic and OpenAI broker
+  routes stay open, while the run holds only its per-run token. No CLI login directory is mounted for them.
 - OpenCode Go uses its own saved key and credential/session directory. Only a Go run mounts that directory and receives
   its `XDG_DATA_HOME`; native vendor, Google and free OpenCode runs do not receive the Go login.
 - Free OpenCode, Go and Google runs receive MCP-only run tokens: no vendor broker environment and no vendor-authorized
   broker grant. Go and free OpenCode keep separate sessions.
 - Google runs use the user's Antigravity login, not a Google API key. Its directory contains the sign-in token and sessions.
+- Pi's ACP adapter advertises no MCP support, so Kestrel's MCP tools are not available in Pi runs; the other harnesses
+  get the thread's MCP server in `session/new`.
 - Session records retain their actual model provider, even when multiple providers run Claude Code. Switching providers
   cannot resume another provider's session; returning to a provider can resume its own usable session.
 
@@ -55,16 +64,27 @@ Sources: [DeepSeek models and alias mapping](https://api-docs.deepseek.com/quick
 
 ## On the box
 
-Install the CLI on the box user's PATH (sandboxed runs use the box's Nix/toolkit PATH).
+Install the CLI on the box user's PATH (sandboxed runs use the box's Nix/toolkit PATH). Under the `basic` sandbox the
+binaries are found in `$HOME` and bound into the run; under `strict` they must be in the toolchain PATH.
 
 | Provider | Required CLI | Login/session storage | Command override |
 |---|---|---|---|
 | OpenCode free | OpenCode 2.0+ (`npm i -g @opencode/cli`) | thread home, no key | `CLOUDAGENTS_OPENCODE_COMMAND` |
 | OpenCode Go | OpenCode 2.1+ | `<dataDir>/users/<login>/opencode-go`, isolated from free models | `CLOUDAGENTS_OPENCODE_GO_COMMAND` |
 | Google | Antigravity CLI 1.5+ (`agy`, pinned by the flake) | `<dataDir>/users/<login>/antigravity` | `CLOUDAGENTS_GOOGLE_COMMAND` |
+| OMP | `curl -fsSL https://omp.sh/install \| sh` (`omp` on PATH) | thread home, no key | `CLOUDAGENTS_OMP_COMMAND` |
+| Pi | `npm install -g @earendil-works/pi-coding-agent pi-acp` | thread home, no key | `CLOUDAGENTS_PI_COMMAND` |
+| Hermes | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` | thread home, no key | `CLOUDAGENTS_HERMES_COMMAND` |
 
 `dataDir` is `CLOUDAGENTS_DATA_DIR`, or `.data` under the repository by default. `opencode-ai` and
 opencode.ai/install are OpenCode 1 and do not satisfy these requirements.
+
+The ACP commands are `omp acp`, `pi-acp`, `hermes acp`, `opencode acp` and `agy acp --gemini-dir "$AGY_GEMINI_DIR"`.
+Each of OMP, Pi and Hermes offers two free models, DeepSeek Flash and DeepSeek V4 Pro, named in its own namespace:
+`deepseek/deepseek-flash` and `deepseek/deepseek-v4-pro` under OMP and Pi, `deepseek:deepseek-flash` and
+`deepseek:deepseek-v4-pro` under Hermes. The catalog ids are unique per provider (`omp-deepseek-flash`,
+`pi-deepseek-flash`, …), so the same model name can be offered by several harnesses without ambiguity;
+`ModelInfo.acpModel` carries the value the harness's `model` config option takes.
 
 Go signs in through Settings › Connections using its password-key form. The box passes the key to
 `opencode auth import --standalone` over stdin, not argv or Hub storage. Replacing the named credential preserves
@@ -81,7 +101,9 @@ managed/relay box's availability. Switching boxes resets or scopes connection ca
 stored accounts manageable while its CLI rows become unavailable.
 
 `GET /api/connections` retains native CLI-login state and free OpenCode availability for installed clients. Updated
-clients replace this legacy box state with selected-box data. Retired OMP/Pi/Hermes rows are not offered.
+clients replace this legacy box state with selected-box data, and offer a standalone harness row (OpenCode, OMP, Pi,
+Hermes) only when the selected box's `harnesses` lists it; otherwise the row is reported unavailable with its install
+command.
 
 The status and usage arrays preserve installed clients' provider literals. With no `providers` query,
 `GET /api/cli-auth` and `GET /api/cli-auth/usage` return the pre-Go providers where supported, never Go—even when a Go
@@ -90,8 +112,9 @@ key is configured. Updated clients advertise the catalog they can decode through
 providers, keeping Go status/quotas available without breaking an older decoder.
 
 - Capability probes use the configured `CLOUDAGENTS_*_COMMAND`, including native-binary overrides and minimum versions.
+- An unavailable standalone harness names the binary it looked for and its install command.
 - Each ACP launch rechecks only its selected provider's command/version, so a removed or downgraded CLI fails before launch.
 - With `CLOUDAGENTS_FAKE_AGENT=1`, the scripted agent supports Anthropic, OpenAI, free OpenCode, Go and Google; other
-  provider commands are unavailable in that mode.
+  provider commands (including OMP, Pi and Hermes) are unavailable in that mode.
 
 The ACP driver remains shared in `packages/server/src/core/acp.ts`; transcript items are decoded in `core/transcript.ts`.

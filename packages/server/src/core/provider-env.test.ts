@@ -34,6 +34,9 @@ describe("per-provider run environment", () => {
     expect(loginsForProvider("google", connected)).toEqual([google])
     expect(loginsForProvider("anthropic", connected)).toEqual(logins)
     expect(loginsForProvider("openai", connected)).toEqual(logins)
+    for (const provider of ["omp", "pi", "hermes"] as const) {
+      expect(loginsForProvider(provider, connected)).toEqual([])
+    }
     for (const provider of ModelProvider.literals.filter((id) => id !== "opencode-go")) {
       expect(loginsForProvider(provider, connected)).not.toContain(go)
     }

@@ -54,6 +54,18 @@ const DEFAULT_OPENCODE_COMMAND = `OPENCODE_CONFIG_CONTENT=${shellQuote(
 const DEFAULT_GOOGLE_COMMAND =
   'agy acp --gemini-dir "${AGY_GEMINI_DIR:-$HOME/.gemini}" --dangerously-skip-permissions --disable-telemetry'
 
+/**
+ * OMP speaks ACP natively (`omp acp`). It and the two harnesses below are standalone ACP harnesses: their runs reach
+ * models through the broker's vendors channel, so no CLI login is needed on the box.
+ */
+const DEFAULT_OMP_COMMAND = "omp acp"
+
+/** Pi speaks ACP only through its adapter binary (`pi-acp`), which launches the Pi agent itself. */
+const DEFAULT_PI_COMMAND = "pi-acp"
+
+/** Hermes runs its ACP host with `hermes acp`; its setup and sessions live under the run's home. */
+const DEFAULT_HERMES_COMMAND = "hermes acp"
+
 export interface ServerConfig {
   readonly port: number
   readonly host: string
@@ -77,7 +89,8 @@ export interface ServerConfig {
    * (`CLOUDAGENTS_ANTHROPIC_COMMAND`, `CLOUDAGENTS_OPENAI_COMMAND`, `CLOUDAGENTS_OPENROUTER_COMMAND`,
    * `CLOUDAGENTS_ZAI_COMMAND`, `CLOUDAGENTS_DEEPSEEK_COMMAND`, `CLOUDAGENTS_MINIMAX_COMMAND`,
    * `CLOUDAGENTS_MOONSHOT_COMMAND`, `CLOUDAGENTS_DEEPINFRA_COMMAND`, `CLOUDAGENTS_OPENCODE_COMMAND`,
-   * `CLOUDAGENTS_OPENCODE_GO_COMMAND` and `CLOUDAGENTS_GOOGLE_COMMAND` override the defaults).
+   * `CLOUDAGENTS_OPENCODE_GO_COMMAND`, `CLOUDAGENTS_GOOGLE_COMMAND`, `CLOUDAGENTS_OMP_COMMAND`,
+   * `CLOUDAGENTS_PI_COMMAND` and `CLOUDAGENTS_HERMES_COMMAND` override the defaults).
    * The Anthropic command must read Claude Code's stream-json input on stdin: the harness writes the prompt there as
    * the first user message, adds mid-run messages and sends `interrupt`, and closes stdin after the first `result`.
    * It reads `CLOUDAGENTS_MODEL` / `CLOUDAGENTS_EFFORT` when the message chose them (Claude Code's `--model` /
@@ -87,7 +100,9 @@ export interface ServerConfig {
    * Codex app-server on stdio: the harness sends it the prompt, model, effort and the thread to resume. An OpenAI run
    * reaches the model through the broker: `OPENAI_BASE_URL` is passed to codex's `openai_base_url`. The OpenCode
    * command (also used for OpenCode Go) must start an ACP server on stdio: the harness opens or resumes the session
-   * and sends the prompt, model and effort over it. OpenCode runs its own models and gets no broker keys.
+   * and sends the prompt, model and effort over it. OpenCode runs its own models and gets no broker keys. The OMP,
+   * Pi and Hermes commands must start their ACP server (or adapter) on stdio; their runs reach models through the
+   * broker's vendors channel, and the harness's own model id comes from `acpModelOf`.
    */
   readonly agentCommands: Record<ModelProvider, string>
   readonly fakeAgent: boolean
@@ -165,6 +180,9 @@ export const loadConfig = (): ServerConfig => {
         opencode: fakeCommand,
         "opencode-go": fakeCommand,
         google: fakeCommand,
+        omp: "",
+        pi: "",
+        hermes: "",
       }
     : {
         anthropic: process.env.CLOUDAGENTS_ANTHROPIC_COMMAND ?? DEFAULT_ANTHROPIC_COMMAND,
@@ -179,6 +197,10 @@ export const loadConfig = (): ServerConfig => {
         opencode: process.env.CLOUDAGENTS_OPENCODE_COMMAND ?? DEFAULT_OPENCODE_COMMAND,
         "opencode-go": process.env.CLOUDAGENTS_OPENCODE_GO_COMMAND ?? DEFAULT_OPENCODE_COMMAND,
         google: process.env.CLOUDAGENTS_GOOGLE_COMMAND ?? DEFAULT_GOOGLE_COMMAND,
+        // Standalone ACP harnesses: no connection or CLI login, only the binary on the box.
+        omp: process.env.CLOUDAGENTS_OMP_COMMAND ?? DEFAULT_OMP_COMMAND,
+        pi: process.env.CLOUDAGENTS_PI_COMMAND ?? DEFAULT_PI_COMMAND,
+        hermes: process.env.CLOUDAGENTS_HERMES_COMMAND ?? DEFAULT_HERMES_COMMAND,
       }
   const sandboxPath = process.env.CLOUDAGENTS_SANDBOX_PATH?.trim() || null
   const sandbox = sandboxLevel(sandboxPath)

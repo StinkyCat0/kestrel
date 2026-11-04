@@ -5,11 +5,17 @@ import { Config } from "../config"
 import { CredentialStore } from "../credentials"
 
 /**
- * Providers Kestrel brokers model calls for. An ACP harness is not a broker provider: OpenCode (free or Go) runs its
- * own provider's models with no broker access at all, and Antigravity reaches Google's models through the user's own
- * sign-in.
+ * Providers Kestrel brokers model calls for. An ACP harness is not a broker provider: OMP, Pi and Hermes use
+ * `vendors`, OpenCode runs its own free models with no broker access at all, and Antigravity reaches Google's models
+ * through the user's own sign-in.
  */
-export type BrokerProvider = Exclude<ModelProvider, "opencode" | "opencode-go" | "google">
+export type BrokerProvider = Exclude<ModelProvider, "opencode" | "opencode-go" | "omp" | "pi" | "hermes" | "google">
+
+/**
+ * What a run's broker token may reach: one provider (a gateway), both vendor APIs (`vendors`: a vendor CLI run or a
+ * standalone ACP harness, whose CLI may call either vendor), or nothing (`null`: no broker access at all).
+ */
+export type BrokerChannel = BrokerProvider | "vendors" | null
 
 /** Where the broker forwards each provider's calls, and the header that carries the real key. */
 export const BROKER_UPSTREAMS: Record<BrokerProvider, { readonly base: string; readonly keyHeader: "x-api-key" | "bearer" }> = {
@@ -28,19 +34,21 @@ export const BROKER_UPSTREAMS: Record<BrokerProvider, { readonly base: string; r
 export const BROKER_PROVIDERS = Object.keys(BROKER_UPSTREAMS) as ReadonlyArray<BrokerProvider>
 
 /**
- * The env that points a run's CLI at the broker for `provider`.
+ * The env that points a run's CLI at the broker for `channel`.
  *
  * Anthropic and OpenAI keep their own credential env. Every other provider speaks the Anthropic Messages API to
  * Claude Code, which reads a gateway key from `ANTHROPIC_AUTH_TOKEN`; `ANTHROPIC_API_KEY` must be empty or Claude
  * Code prefers it and sends `x-api-key` to the gateway.
  */
-export const brokerEnv = (provider: BrokerProvider | null, base: string, token: string): Record<string, string> => {
-  switch (provider) {
+export const brokerEnv = (channel: BrokerChannel, base: string, token: string): Record<string, string> => {
+  switch (channel) {
     case null:
       return {}
     case "anthropic":
     case "openai":
-      // Both vendor CLIs are available to either run: a Claude agent may shell out to codex, and vice versa.
+    case "vendors":
+      // Both vendor CLIs are available to either run: a Claude agent may shell out to codex, and vice versa, and a
+      // standalone harness may call either vendor's API.
       return {
         ANTHROPIC_BASE_URL: `${base}/anthropic`,
         ANTHROPIC_API_KEY: token,
@@ -50,7 +58,7 @@ export const brokerEnv = (provider: BrokerProvider | null, base: string, token: 
       }
     default:
       return {
-        ANTHROPIC_BASE_URL: `${base}/${provider}`,
+        ANTHROPIC_BASE_URL: `${base}/${channel}`,
         ANTHROPIC_AUTH_TOKEN: token,
         ANTHROPIC_API_KEY: "",
       }
@@ -70,7 +78,7 @@ export const credentialFor = (creds: RelayCredentials | null, provider: BrokerPr
 export interface BrokerGrant {
   readonly runId: string
   readonly user: string
-  /** Vendor runs may use both vendor APIs; gateway runs only their selected provider; ACP runs neither. */
+  /** Vendor and standalone-harness runs may use both vendor APIs; gateway runs only their selected provider. */
   readonly providers: readonly BrokerProvider[]
 }
 
@@ -81,8 +89,8 @@ export interface BrokerLease {
 }
 
 export interface CredentialBrokerShape {
-  /** Mints a per-run token, scoped to its model provider (null for MCP-only ACP runs). */
-  readonly issue: (runId: string, user: string, provider: BrokerProvider | null) => Effect.Effect<BrokerLease>
+  /** Mints a per-run token, scoped to `channel` (null for MCP-only ACP runs). */
+  readonly issue: (runId: string, user: string, channel: BrokerChannel) => Effect.Effect<BrokerLease>
   /** Invalidates the run's token and notifies revoke listeners. Idempotent. */
   readonly revoke: (runId: string) => Effect.Effect<void>
   /** Grant for a live token; null when unknown or revoked. */
@@ -127,16 +135,22 @@ export const CredentialBrokerLive = Layer.effect(
     }
 
     const broker: CredentialBrokerShape = {
-      issue: (runId, user, provider) =>
+      issue: (runId, user, channel) =>
         Effect.sync(() => {
           revokeSync(runId)
           const token = randomBytes(24).toString("base64url")
+          // A vendor or standalone ACP harness keeps both vendor APIs, so either CLI may shell out to the other;
+          // a gateway run is scoped to its own provider.
           const providers: readonly BrokerProvider[] =
-            provider === null ? [] : provider === "anthropic" || provider === "openai" ? ["anthropic", "openai"] : [provider]
+            channel === null
+              ? []
+              : channel === "vendors" || channel === "anthropic" || channel === "openai"
+                ? ["anthropic", "openai"]
+                : [channel]
           grantByToken.set(token, { runId, user, providers })
           tokenByRun.set(runId, token)
           const base = `http://127.0.0.1:${config.sandboxPort}/broker/${token}`
-          return { token, env: brokerEnv(provider, base, token) }
+          return { token, env: brokerEnv(channel, base, token) }
         }),
       revoke: (runId) => Effect.sync(() => revokeSync(runId)),
       grantForToken: (token) => Effect.sync(() => grantFor(token)),

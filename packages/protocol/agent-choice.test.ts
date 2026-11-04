@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
-import { AGENT_MODELS, MODEL_PROVIDERS, connectedModelProviders, resolveAgentChoice, threadChoiceRun, type AgentEffort, type AgentModel } from "./src/models"
+import { AGENT_MODELS, MODEL_PROVIDERS, acpModelOf, connectedModelProviders, providerModels, resolveAgentChoice, threadChoiceRun, type AgentEffort, type AgentModel } from "./src/models"
 import { connectionsForBox, type Connection } from "./src/control"
 import { SendMessageBody } from "./src/index"
 
@@ -159,12 +159,23 @@ describe("selected-box connections", () => {
     expect(connectedModelProviders(rows, undefined).map((provider) => provider.id)).toEqual([])
   })
 
-  test("retired standalone harness rows never survive the merge", () => {
+  test("standalone ACP harness rows follow the selected box's capabilities", () => {
     const rows = connectionsForBox([cli("omp", true), cli("pi", true), cli("hermes", true), cli("opencode", true)], {
       cliAuth: [],
-      harnesses: ["opencode"],
+      harnesses: ["opencode", "omp", "pi", "hermes"],
     })
-    expect(rows.map((connection) => connection.provider)).toEqual(["opencode"])
+    expect(rows.map((connection) => connection.provider)).toEqual(["opencode", "omp", "pi", "hermes"])
+    for (const provider of ["opencode", "omp", "pi", "hermes"]) {
+      expect(rows.find((connection) => connection.provider === provider)).toMatchObject({ connected: true, available: true })
+    }
+    expect(connectedModelProviders(rows, ["opencode", "omp", "pi", "hermes"]).map((provider) => provider.id)).toEqual([
+      "opencode", "omp", "pi", "hermes",
+    ])
+  })
+
+  test("a standalone harness the box cannot launch stays unavailable", () => {
+    const rows = connectionsForBox([cli("opencode", true)], { cliAuth: [], harnesses: ["opencode"] })
+    expect(rows.find((connection) => connection.provider === "omp")).toMatchObject({ connected: false, available: false })
     expect(connectedModelProviders(rows, ["opencode"]).map((provider) => provider.id)).toEqual(["opencode"])
   })
 
@@ -241,5 +252,27 @@ describe("DeepInfra models", () => {
       defaultEffort: undefined,
     })
     expect(chosen.model?.provider).toBe("moonshot")
+  })
+})
+
+describe("standalone ACP harness catalog", () => {
+  test("each harness sends its own model namespace for a name they share", () => {
+    expect(acpModelOf("omp-deepseek-flash")).toBe("deepseek/deepseek-flash")
+    expect(acpModelOf("pi-deepseek-flash")).toBe("deepseek/deepseek-flash")
+    expect(acpModelOf("hermes-deepseek-flash")).toBe("deepseek:deepseek-flash")
+    // OpenCode and Antigravity catalog ids already are the value their config option takes.
+    expect(acpModelOf("opencode/big-pickle")).toBe("opencode/big-pickle")
+    expect(acpModelOf("gemini-3.8-flash")).toBe("gemini-3.8-flash")
+  })
+
+  test("the three harnesses need no connection, keep distinct catalog ids, and Pi takes no MCP servers", () => {
+    for (const provider of ["omp", "pi", "hermes"] as const) {
+      expect(MODEL_PROVIDERS.find((candidate) => candidate.id === provider)?.connections).toEqual([])
+      expect(providerModels(provider)).toHaveLength(2)
+    }
+    expect(MODEL_PROVIDERS.find((candidate) => candidate.id === "pi")?.mcp).toBe(false)
+    expect(MODEL_PROVIDERS.find((candidate) => candidate.id === "omp")?.mcp).toBeUndefined()
+    // Distinct catalog ids are what keep a shared model name scoped to the thread's selected harness.
+    expect(new Set(AGENT_MODELS.map((model) => model.id)).size).toBe(AGENT_MODELS.length)
   })
 })

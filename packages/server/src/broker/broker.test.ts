@@ -39,6 +39,15 @@ describe("broker provider mapping", () => {
     }
   })
 
+  test("a standalone ACP harness's vendors channel keeps both vendor APIs open", () => {
+    expect(brokerEnv("vendors", BASE, "t")).toEqual({
+      ANTHROPIC_BASE_URL: `${BASE}/anthropic`,
+      ANTHROPIC_API_KEY: "t",
+      OPENAI_BASE_URL: `${BASE}/openai/v1`,
+      OPENAI_API_KEY: "t",
+    })
+  })
+
   test.each(["openrouter", "deepinfra"] as const)(
     "gateway requests keep the %s path and carry the key as a bearer token",
     async (provider) => {

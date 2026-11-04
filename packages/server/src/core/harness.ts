@@ -9,7 +9,9 @@ import {
   RunItems,
   DEFAULT_MODEL_PROVIDER,
   MODEL_PROVIDERS,
+  acpModelOf,
   modelInfo,
+  providerInfo,
   type AgentEffort,
   type AgentItem,
   type AgentModel,
@@ -23,7 +25,7 @@ import {
 } from "@cloudagents/protocol"
 import { AGENT_CLIS, MODEL_HARNESS, type ConversationKind } from "../agent-clis"
 import { CliAuth } from "../cliauth"
-import { CredentialBroker, type BrokerProvider } from "../broker"
+import { CredentialBroker, type BrokerChannel, type BrokerProvider } from "../broker"
 import { boxControl } from "../control/client"
 import { Config, VERSION } from "../config"
 import { harnessAvailability, harnessProbe } from "../capabilities"
@@ -730,9 +732,11 @@ export const AgentHarnessLive = Layer.effect(
       spawn: (task, run, start, display, user, choice) => {
         const launch = (admission: Admission) => Effect.gen(function* () {
           const provider = choice.model === undefined ? DEFAULT_MODEL_PROVIDER : modelInfo(choice.model).provider
-          // A vendor CLI or gateway run reaches models through the broker; a harness that runs its own models
-          // (OpenCode free or Go, Antigravity) gets no broker access at all.
-          const channel: BrokerProvider | null = MODEL_HARNESS[provider].broker ? (provider as BrokerProvider) : null
+          // A vendor CLI or gateway run reaches models through the broker; a standalone ACP harness (OMP, Pi, Hermes)
+          // uses the broker's vendors channel; a harness that runs its own models (OpenCode free or Go, Antigravity)
+          // gets no broker access at all.
+          const route = MODEL_HARNESS[provider]
+          const channel: BrokerChannel = route.broker ? (route.cli === null ? "vendors" : (provider as BrokerProvider)) : null
           if (MODEL_HARNESS[provider].conversation === "acp") {
             // A harness the box cannot launch is refused here, not left to fail (or hang) mid-run. Probe only the
             // harness this run needs, so a launch never runs every harness's `--version`.
@@ -883,10 +887,14 @@ export const AgentHarnessLive = Layer.effect(
                       prompt,
                       cwd,
                       resumeSession,
-                      model: choice.model,
+                      // The harness's own model namespace; the catalog id is it for OpenCode and Antigravity.
+                      model: choice.model === undefined ? undefined : acpModelOf(choice.model),
                       effort: choice.effort,
-                      // The thread's tools, as the other harnesses get them from the run's MCP config.
-                      mcpServers: [{ type: "http", name: "cloudagents", url: mcpUrl, headers: [{ name: "Authorization", value: `Bearer ${lease.token}` }] }],
+                      // The thread's tools, as the other harnesses get them from the run's MCP config. Pi's ACP
+                      // adapter advertises no MCP support, so its runs get none.
+                      mcpServers: providerInfo(provider).mcp === false
+                        ? []
+                        : [{ type: "http", name: "cloudagents", url: mcpUrl, headers: [{ name: "Authorization", value: `Bearer ${lease.token}` }] }],
                     },
                   }),
                 } satisfies Record<ConversationKind, () => RunConversation>)[harness.conversation](),
