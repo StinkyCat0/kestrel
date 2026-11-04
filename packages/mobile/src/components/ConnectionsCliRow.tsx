@@ -19,6 +19,7 @@ const CLI_POLL_MS = 3000;
 const CLI_INTRO: Record<CliProvider, string> = {
   "claude-cli": "Use your own Claude Pro or Max subscription.",
   "codex-cli": "Use your own ChatGPT subscription.",
+  "antigravity-cli": "Use your own Google account through Antigravity CLI.",
 };
 
 interface Props {
@@ -150,7 +151,7 @@ export function ConnectionsCliRow({ connection, provider }: Props) {
             Open sign-in page
           </Button>
           <Text style={connectionStyles.muted}>
-            Sign in on Anthropic's page, then paste the code it shows you.
+            Sign in on that page, then paste the code it shows you.
           </Text>
           <Input
             value={code}

@@ -45,6 +45,7 @@ const CLI_POLL_MS = 3000
 const CLI_INTRO: Record<CliProvider, string> = {
   "claude-cli": "Use your own Claude Pro or Max subscription.",
   "codex-cli": "Use your own ChatGPT subscription.",
+  "antigravity-cli": "Use your own Google account through Antigravity CLI.",
 }
 
 /** Body of Settings › Connections: the accounts and keys, then the models each provider shows in the chat picker. */
@@ -392,7 +393,7 @@ function CliConnectionRow({ connection, provider }: { connection: Connection; pr
               Open sign-in page
             </a>
           </Button>
-          <p className="text-muted-foreground">Sign in on Anthropic's page, then paste the code it shows you.</p>
+          <p className="text-muted-foreground">Sign in on that page, then paste the code it shows you.</p>
           <form
             className="flex flex-wrap gap-2"
             onSubmit={(e) => {
