@@ -164,6 +164,7 @@ export const MODEL_HARNESS: Record<ModelProvider, Harness> = {
   openai: { conversation: "codex", cli: "codex-cli", bin: "codex", minMajor: null, broker: true },
   // Anthropic-compatible gateways run through Claude Code.
   openrouter: { conversation: "claude", cli: "claude-cli", bin: "claude", minMajor: null, broker: true },
+  zai: { conversation: "claude", cli: "claude-cli", bin: "claude", minMajor: null, broker: true },
   // The ACP driver is built against OpenCode 2 (`session/resume`, session config options); OpenCode 1 is its own line.
   opencode: { conversation: "acp", cli: null, bin: "opencode", minMajor: 2, broker: false },
   // OMP, Pi and Hermes speak ACP themselves; their runs reach models through the broker (`vendors`).
