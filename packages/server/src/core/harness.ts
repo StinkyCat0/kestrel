@@ -168,9 +168,12 @@ const ACP_CONFIG_DIRS: Partial<Record<ModelProvider, string>> = {
   hermes: ".hermes",
 }
 
-/** A broker provider for a model run, or null when the ACP harness owns its own model credentials. */
+/**
+ * A broker provider for a model run, or null for a standalone ACP harness. The ACP harnesses are exactly the providers
+ * `BrokerProvider` excludes, which the record lookup cannot express to the type system on its own.
+ */
 const brokerProviderOf = (provider: ModelProvider): BrokerProvider | null =>
-  MODEL_HARNESS[provider].conversation === "acp" ? null : provider
+  MODEL_HARNESS[provider].conversation === "acp" ? null : (provider as BrokerProvider)
 
 /** What a run starts from besides its process: the session's last context use, and its conversation if it has one. */
 interface RunSession {
@@ -962,6 +965,7 @@ export const AgentHarnessLive = Layer.effect(
                       effort: choice.effort,
                       // The thread's tools, as the other harnesses get them from the run's MCP config.
                       mcpServers: [{ type: "http", name: "cloudagents", url: mcpUrl, headers: [{ name: "Authorization", value: `Bearer ${lease.token}` }] }],
+                      clientVersion: VERSION,
                     },
                   }),
                 } satisfies Record<ConversationKind, () => RunConversation>)[MODEL_HARNESS[provider].conversation](),

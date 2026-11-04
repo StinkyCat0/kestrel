@@ -38,6 +38,25 @@ describe("harness routing", () => {
     expect(scoped.route.acpModel).toBe("deepseek/deepseek-v4-pro")
   })
 
+  test("an OpenCode model routes to OpenCode's ACP harness, and only when the box reported it", () => {
+    expect(harnessIdOfModel("opencode/big-pickle")).toBe("opencode")
+    const missing = resolveModelRoute({
+      harnessId: "opencode",
+      modelId: "opencode/big-pickle",
+      connections: [anthropic, openai],
+    })
+    expect(missing.ok).toBe(false)
+    if (!missing.ok) expect(missing.code).toBe("connection-unavailable")
+    const routed = resolveModelRoute({
+      harnessId: "opencode",
+      modelId: "opencode/big-pickle",
+      connections: [anthropic, openai, row("opencode")],
+    })
+    if (!routed.ok) throw new Error(routed.message)
+    expect(routed.route.harness).toBe("opencode")
+    expect(routed.route.connectionId).toBe("opencode")
+  })
+
   test("a model from another harness is a mismatch, never a hidden fallback", () => {
     const result = resolveModelRoute({ harnessId: "omp", modelId: "claude-opus-5-5", connections: [anthropic] })
     expect(result.ok).toBe(false)

@@ -4,8 +4,11 @@ import { type ModelProvider, type RelayCredentials } from "@cloudagents/protocol
 import { Config } from "../config"
 import { CredentialStore } from "../credentials"
 
-/** Providers Kestrel brokers model calls for. A standalone ACP harness is not a provider; its runs use `vendors`. */
-export type BrokerProvider = Exclude<ModelProvider, "omp" | "pi" | "hermes">
+/**
+ * Providers Kestrel brokers model calls for. A standalone ACP harness is not a broker provider: OMP, Pi and Hermes
+ * use `vendors`, and OpenCode runs its own free models with no broker access at all.
+ */
+export type BrokerProvider = Exclude<ModelProvider, "opencode" | "omp" | "pi" | "hermes">
 
 /**
  * What a run's broker token may reach: one provider (a gateway), both vendor APIs (`vendors`: a vendor CLI run or an

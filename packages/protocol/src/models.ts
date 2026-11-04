@@ -20,24 +20,26 @@ export const AgentHarness = Schema.Literal("claude", "codex", "acp")
 export type AgentHarness = typeof AgentHarness.Type
 
 /**
- * The harness a thread selects: a vendor CLI (`claude`, `codex`) or a standalone ACP harness (`omp`, `pi`, `hermes`).
- * A provider maps to exactly one of these (`harnessIdOfProvider`), which is how a model id is scoped to a harness.
+ * The harness a thread selects: a vendor CLI (`claude`, `codex`) or a standalone ACP harness (`opencode`, `omp`, `pi`,
+ * `hermes`). A provider maps to exactly one of these (`harnessIdOfProvider`), which is how a model id is scoped to a
+ * harness.
  */
-export const HarnessId = Schema.Literal("claude", "codex", "omp", "pi", "hermes")
+export const HarnessId = Schema.Literal("claude", "codex", "opencode", "omp", "pi", "hermes")
 export type HarnessId = typeof HarnessId.Type
 
-export const HARNESS_IDS: readonly HarnessId[] = ["claude", "codex", "omp", "pi", "hermes"]
+export const HARNESS_IDS: readonly HarnessId[] = ["claude", "codex", "opencode", "omp", "pi", "hermes"]
 
 /**
  * Standalone ACP harnesses: their own CLI runs the model, so the box has to have that CLI before the harness can be
  * offered. The box reports which of these it can launch (`HarnessStatus`), and only those reach the picker.
  */
-export const AcpHarnessId = Schema.Literal("omp", "pi", "hermes")
+export const AcpHarnessId = Schema.Literal("opencode", "omp", "pi", "hermes")
 export type AcpHarnessId = typeof AcpHarnessId.Type
 
 export const HARNESS_LABELS: Record<HarnessId, string> = {
   claude: "Claude Code",
   codex: "Codex",
+  opencode: "OpenCode",
   omp: "OMP",
   pi: "Pi",
   hermes: "Hermes",
