@@ -270,6 +270,39 @@ export const SetDesktopQualityBody = Schema.Struct({ quality: DesktopQuality })
 export type SetDesktopQualityBody = typeof SetDesktopQualityBody.Type
 
 /**
+ * One application's share of a thread's resources: its processes in the thread's systemd slice, grouped by program
+ * (`node · vite` for a script run by node, bun, deno or python). `name` is null for the remainder past the largest
+ * groups, summed.
+ */
+export const TaskAppUsage = Schema.Struct({
+  name: Schema.NullOr(Schema.String),
+  processes: Schema.Number,
+  /**
+   * Proportional anonymous and shared memory in bytes (Pss_Anon + Pss_Shmem): a page several processes share, such as
+   * a fork's copy-on-write pages, is divided between them, so the groups add up without counting a page twice.
+   */
+  ramUsed: Schema.Number,
+  /** Share of the thread's CPU quota used since the previous sample, 0 to 1. */
+  cpu: Schema.Number,
+})
+export type TaskAppUsage = typeof TaskAppUsage.Type
+
+/**
+ * What a thread's RAM holds besides its processes' own memory, in bytes, from its slice's `memory.stat`. With
+ * `TaskAppUsage.ramUsed` over every group it adds up to `TaskStatsSample.ramUsed`, give or take what changed between
+ * the reads.
+ */
+export const TaskRamOther = Schema.Struct({
+  /** File contents cached in RAM: the kernel can reclaim it before the thread hits its limit. */
+  pageCache: Schema.Number,
+  /** Files in tmpfs (the sandbox's `/tmp`) and shared memory no process maps. */
+  tmpfs: Schema.Number,
+  /** The kernel's own memory for the thread: page tables, sockets, slab. */
+  kernel: Schema.Number,
+})
+export type TaskRamOther = typeof TaskRamOther.Type
+
+/**
  * One reading of a thread's resources against its own limits, in bytes. RAM and CPU come from the thread's systemd
  * slice and are null on a box without one (`CLOUDAGENTS_SYSTEMD=0`). VRAM is the whole GPU, shared by every thread
  * (there is no per-thread VRAM limit), and null without an NVIDIA GPU. Storage is the thread's files against its
@@ -288,6 +321,13 @@ export const TaskStatsSample = Schema.Struct({
   /** The thread's workspace, home and git data. It can pass `diskMax` briefly; the box then stops what keeps it growing. */
   diskUsed: Schema.NullOr(Schema.Number),
   diskMax: Schema.Number,
+  /**
+   * The slice's applications, most memory first; empty without systemd. Absent from boxes older than the field, so
+   * clients treat a missing list as unknown rather than empty.
+   */
+  apps: Schema.optional(Schema.Array(TaskAppUsage)),
+  /** The rest of `ramUsed` beside `apps`; null without systemd, absent from boxes older than the field. */
+  ramOther: Schema.optional(Schema.NullOr(TaskRamOther)),
 })
 export type TaskStatsSample = typeof TaskStatsSample.Type
 
