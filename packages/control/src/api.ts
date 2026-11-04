@@ -4,6 +4,7 @@ import {
   BOX_TOKEN_QUERY,
   CREDENTIALS_HEADER,
   CliAuthStatus,
+  CliProvider,
   ControlPaths,
   CreateBoxBody,
   CreateFleetBoxBody,
@@ -28,7 +29,7 @@ import {
   findProvider,
   isAvailable,
   type ApiKeyProvider,
-  type CliProvider,
+  type CliProvider as CliConnectionProvider,
   type OAuthProvider,
   type Provider,
 } from "./providers"
@@ -59,10 +60,7 @@ const storedView = (
   ...(provider.kind === "apikey" && provider.hint !== undefined ? { hint: provider.hint } : {}),
 })
 
-/**
- * A standalone ACP harness as a Connections row. Its own CLI is the connection: `connected` says the box can launch it,
- * and it carries no login, because a harness run reaches models through Kestrel's broker.
- */
+/** Legacy clients render this box status directly; newer clients replace it with their selected box's state. */
 const harnessView = (status: HarnessStatus): Connection => ({
   provider: status.harness,
   label: HARNESS_LABELS[status.harness],
@@ -73,7 +71,7 @@ const harnessView = (status: HarnessStatus): Connection => ({
   ...(status.error === undefined ? {} : { error: status.error }),
 })
 
-const cliView = (provider: CliProvider, status: CliAuthStatus | undefined): Connection => ({
+const cliView = (provider: CliConnectionProvider, status: CliAuthStatus | undefined): Connection => ({
   provider: provider.id,
   label: provider.label,
   kind: provider.kind,
@@ -83,9 +81,9 @@ const cliView = (provider: CliProvider, status: CliAuthStatus | undefined): Conn
   ...(status?.error === undefined ? {} : { error: status.error }),
 })
 
-/** Devbox CLI logins as the box reports them; empty when the box is offline or answers badly. */
+/** Preserve the installed clients' CLI-login response, including offline/older-box handling. */
 const fetchCliAuth = async (login: string, env: Env): Promise<readonly CliAuthStatus[]> => {
-  const res = await hub(env).boxCall(login, "GET", ControlPaths.cliAuth)
+  const res = await hub(env).boxCall(login, "GET", ControlPaths.cliAuthFor(CliProvider.literals))
   if (!res.ok) return []
   let body: unknown = null
   try {
@@ -96,7 +94,7 @@ const fetchCliAuth = async (login: string, env: Env): Promise<readonly CliAuthSt
   return Schema.is(Schema.Array(CliAuthStatus))(body) ? body : []
 }
 
-/** Standalone ACP harnesses the box reports it can launch; empty when the box is offline or answers badly. */
+/** Standalone harness rows remain in the response until installed clients no longer depend on them. */
 const fetchHarnessStatus = async (login: string, env: Env): Promise<readonly HarnessStatus[]> => {
   const res = await hub(env).boxCall(login, "GET", ControlPaths.harnessStatus)
   if (!res.ok) return []
@@ -124,12 +122,12 @@ const listConnections = async (login: string, env: Env): Promise<Connection[]> =
     Promise.all(oauth.map((p) => oauthTokenRejected(login, p, env))),
   ])
   const expired = new Set(oauth.filter((_, i) => rejected[i]).map((p) => p.id))
+  // Keep the established response for installed clients. Updated clients normalize these rows against their own box.
   const stored = PROVIDERS.map((p) =>
     p.kind === "cli"
-      ? cliView(p, cli.find((s) => s.provider === p.id))
+      ? cliView(p, cli.find((status) => status.provider === p.id))
       : storedView(p, rows.find((r) => r.provider === p.id), env, expired.has(p.id)),
   )
-  // A harness row is what tells the picker this box can run it at all.
   return [...stored, ...harnesses.map(harnessView)]
 }
 
