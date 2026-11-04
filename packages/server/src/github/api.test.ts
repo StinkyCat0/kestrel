@@ -296,6 +296,61 @@ test("viewerLogin reads the login of the account the token belongs to", async ()
   }
 })
 
+test("commit identity rejects unverified profiles and does not cache failed lookups", async () => {
+  let profile: unknown = { login: "someone-else", id: 123 }
+  const gh = fakeGitHub(() => ({ json: profile }))
+  try {
+    await runAgainst(gh.url, Effect.gen(function* () {
+      const github = yield* GitHub
+      const mismatch = yield* Effect.either(github.commitIdentity("alice", "token"))
+      expect(mismatch._tag).toBe("Left")
+      profile = { login: "alice", id: -1 }
+      const invalid = yield* Effect.either(github.commitIdentity("alice", "token"))
+      expect(invalid._tag).toBe("Left")
+      profile = { login: "Alice", id: 156641090 }
+      expect(yield* github.commitIdentity("alice", "token")).toEqual({
+        name: "Alice", email: "156641090+Alice@users.noreply.github.com",
+      })
+      profile = { login: "other", id: 1 }
+      expect(yield* github.commitIdentity("ALICE", "token")).toEqual({
+        name: "Alice", email: "156641090+Alice@users.noreply.github.com",
+      })
+    }))
+  } finally {
+    gh.stop()
+  }
+})
+
+for (const status of [401, 403]) {
+  test(`commit identity survives a connected token rejected with ${status}`, async () => {
+    let calls = 0
+    const gh = fakeGitHub(() => ++calls === 1
+      ? { status, json: { message: "Bad credentials" } }
+      : { json: { login: "alice", id: 156641090 } })
+    try {
+      expect(await runAgainst(gh.url, Effect.flatMap(GitHub, (github) => github.commitIdentity("alice", "expired")))).toEqual({
+        name: "alice", email: "156641090+alice@users.noreply.github.com",
+      })
+      expect(gh.auth).toEqual(["Bearer expired", null])
+    } finally {
+      gh.stop()
+    }
+  })
+}
+
+test("commit identity reports anonymous lookup failure without repeated retries", async () => {
+  let calls = 0
+  const gh = fakeGitHub(() => ({ status: ++calls === 1 ? 401 : 404 }))
+  try {
+    const result = await runAgainst(gh.url, Effect.flatMap(GitHub, (github) => Effect.either(github.commitIdentity("missing", "expired"))))
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") expect(result.left.status).toBe(404)
+    expect(gh.auth).toEqual(["Bearer expired", null])
+  } finally {
+    gh.stop()
+  }
+})
+
 test("readReference reads an issue's body and conversation, sending the token only to GitHub", async () => {
   const gh = fakeGitHub(({ path }) => {
     if (path === "/repos/jarenm1/kestrel/issues/1") return { json: issueJson() }
