@@ -10,6 +10,7 @@ import {
   providerModels,
   type AgentModel,
   type Connection,
+  type ModelProvider,
   type ModelProviderInfo,
 } from "@cloudagents/protocol";
 import { setShownModels, useShownModels } from "@/hooks/useShownModels";
@@ -17,11 +18,13 @@ import { colors, spacing } from "@/theme";
 
 interface Props {
   readonly connections: readonly Connection[];
+  /** `BoxCapabilities.harnesses` of the box; undefined until it answers. */
+  readonly harnesses: readonly ModelProvider[] | undefined;
 }
 
 /** Per provider, the models the chat's model picker offers; the rest stay out of the way. */
-export function ConnectionsModels({ connections }: Props) {
-  const connected = new Set(connectedModelProviders(connections).map((provider) => provider.id));
+export function ConnectionsModels({ connections, harnesses }: Props) {
+  const connected = new Set(connectedModelProviders(connections, harnesses).map((provider) => provider.id));
   return (
     <View style={styles.wrap}>
       <Text style={styles.title}>Models</Text>
@@ -61,9 +64,13 @@ function ModelRow({ provider, connected, divided }: RowProps) {
       <View style={styles.head}>
         <View style={styles.titleBlock}>
           <Text style={styles.label}>{provider.name}</Text>
-          <Badge variant={connected ? "success" : "neutral"}>
-            {connected ? "connected" : "not connected"}
-          </Badge>
+          {provider.connections.length === 0 ? (
+            <Badge variant="neutral">no sign-in needed</Badge>
+          ) : (
+            <Badge variant={connected ? "success" : "neutral"}>
+              {connected ? "connected" : "not connected"}
+            </Badge>
+          )}
         </View>
         <Button
           variant="soft"
@@ -78,7 +85,11 @@ function ModelRow({ provider, connected, divided }: RowProps) {
         </Button>
       </View>
       {connected ? null : (
-        <Text style={styles.hint}>Connect a key or subscription above to use these.</Text>
+        <Text style={styles.hint}>
+          {provider.connections.length === 0
+            ? `${provider.name} is not installed on this box.`
+            : "Connect a key or subscription above to use these."}
+        </Text>
       )}
       {open ? (
         <View style={styles.list}>
