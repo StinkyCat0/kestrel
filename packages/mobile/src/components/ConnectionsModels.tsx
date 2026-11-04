@@ -87,7 +87,7 @@ function ModelRow({ provider, connected, divided }: RowProps) {
       {connected ? null : (
         <Text style={styles.hint}>
           {provider.connections.length === 0
-            ? `${provider.name} is not installed on this box.`
+            ? `${provider.name} is not installed on this box.${provider.setup === undefined ? "" : ` Install it with: ${provider.setup}.`}`
             : "Connect a key or subscription above to use these."}
         </Text>
       )}

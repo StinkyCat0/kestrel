@@ -2,7 +2,7 @@ import { Schema } from "effect"
 
 /**
  * Anthropic and the third-party gateways run through Claude Code, OpenAI through codex, and OpenCode (its free models
- * and its Go plan) and Antigravity CLI run their own providers' models over the Agent Client Protocol.
+ * and its Go plan), OMP, Pi, Hermes and Antigravity CLI run their own providers' models over the Agent Client Protocol.
  */
 export const ModelProvider = Schema.Literal(
   "anthropic",
@@ -16,6 +16,9 @@ export const ModelProvider = Schema.Literal(
   "opencode",
   "opencode-go",
   "google",
+  "omp",
+  "pi",
+  "hermes",
 )
 export type ModelProvider = typeof ModelProvider.Type
 
@@ -36,9 +39,10 @@ export const EFFORT_LABELS: Record<AgentEffort, string> = {
 }
 
 /**
- * Model id passed to the provider's CLI (`claude --model`, the Codex app-server thread's `model`, the ACP `model`
- * config option of OpenCode, which names OpenCode's own provider first (`opencode` free, `opencode-go` Go), and of
- * Antigravity CLI).
+ * Model id passed to the provider's CLI (`claude --model`, the Codex app-server thread's `model`, and the ACP `model`
+ * config option of OpenCode, Antigravity CLI, OMP, Pi and Hermes). An ACP harness's own namespace can collide across
+ * harnesses (`deepseek/deepseek-flash` in both OMP and Pi), so the catalog id stays unique per provider and
+ * `ModelInfo.acpModel` carries the value the harness takes; `acpModelOf` resolves it.
  */
 export const AgentModel = Schema.Literal(
   "claude-fable-5-1",
@@ -114,6 +118,12 @@ export const AgentModel = Schema.Literal(
   "opencode-go/mimo-v2.5-pro",
   "opencode-go/mimo-v2.5",
   "gemini-3.8-flash",
+  "omp-deepseek-flash",
+  "omp-deepseek-pro",
+  "pi-deepseek-flash",
+  "pi-deepseek-pro",
+  "hermes-deepseek-flash",
+  "hermes-deepseek-pro",
 )
 export type AgentModel = typeof AgentModel.Type
 
@@ -128,6 +138,8 @@ export interface ModelInfo {
   readonly defaultEffort?: AgentEffort
   /** In the chat model picker until the user edits the provider's list on the connections page. */
   readonly shownByDefault: boolean
+  /** The value the ACP harness's `session/set_config_option` expects, when the catalog id is not already it. */
+  readonly acpModel?: string
   /** Provider-advertised context window for Claude Code's auto-compaction. */
   readonly compactWindow?: number
 }
@@ -148,7 +160,8 @@ const OC_LOW_TO_MAX: readonly AgentEffort[] = ["low", "medium", "high", "xhigh",
  * Providers without a documented effort scale list none, so the picker offers no unsupported control. OpenCode's
  * efforts are what its ACP `effort` option offers per model; its free models need no sign-in, and OpenCode rotates
  * them, so the list follows its own. OpenCode Go's are the Go plan's models that no other provider here runs (its
- * Claude, GPT and Gemini models are left to theirs), and none of its free or contributor ones.
+ * Claude, GPT and Gemini models are left to theirs), and none of its free or contributor ones. OMP, Pi and Hermes
+ * publish no effort scale Kestrel maps, so their free models list none.
  */
 export const AGENT_MODELS: readonly ModelInfo[] = [
   { id: "claude-fable-5-1", provider: "anthropic", name: "Claude Fable 5.1", efforts: CLAUDE_ALL, shownByDefault: true },
@@ -231,6 +244,14 @@ export const AGENT_MODELS: readonly ModelInfo[] = [
   { id: "opencode-go/mimo-v2.5", provider: "opencode-go", name: "MiMo V2.5", efforts: [], shownByDefault: false },
   // What a signed-in Google account's Antigravity CLI offers, with its `thought_level` option.
   { id: "gemini-3.8-flash", provider: "google", name: "Gemini 3.8 Flash", efforts: ["low", "medium", "high"], shownByDefault: true },
+  // OMP, Pi and Hermes run ACP and name models in their own provider namespaces; `acpModel` is the value their
+  // `model` config option takes. Their free models need no connection: the box only has to have the harness CLI.
+  { id: "omp-deepseek-flash", provider: "omp", name: "DeepSeek Flash", efforts: [], shownByDefault: true, acpModel: "deepseek/deepseek-flash" },
+  { id: "omp-deepseek-pro", provider: "omp", name: "DeepSeek V4 Pro", efforts: [], shownByDefault: true, acpModel: "deepseek/deepseek-v4-pro" },
+  { id: "pi-deepseek-flash", provider: "pi", name: "DeepSeek Flash", efforts: [], shownByDefault: true, acpModel: "deepseek/deepseek-flash" },
+  { id: "pi-deepseek-pro", provider: "pi", name: "DeepSeek V4 Pro", efforts: [], shownByDefault: true, acpModel: "deepseek/deepseek-v4-pro" },
+  { id: "hermes-deepseek-flash", provider: "hermes", name: "DeepSeek Flash", efforts: [], shownByDefault: true, acpModel: "deepseek:deepseek-flash" },
+  { id: "hermes-deepseek-pro", provider: "hermes", name: "DeepSeek V4 Pro", efforts: [], shownByDefault: true, acpModel: "deepseek:deepseek-v4-pro" },
 ]
 
 export interface ModelProviderInfo {
@@ -241,6 +262,13 @@ export interface ModelProviderInfo {
    * when the provider needs none: the box must report its harness in `BoxCapabilities.harnesses` instead.
    */
   readonly connections: readonly string[]
+  /** How an operator installs the provider's harness CLI on the box; shown when the CLI is missing. */
+  readonly setup?: string
+  /**
+   * False when the harness's ACP adapter does not accept MCP servers (Pi): its runs get no Kestrel MCP tools.
+   * Omitted means the harness takes them.
+   */
+  readonly mcp?: boolean
   /** Provider-specific setup note shown in Connections. */
   readonly hint?: string
 }
@@ -260,6 +288,11 @@ export const MODEL_PROVIDERS: readonly ModelProviderInfo[] = [
   // OpenCode Go runs on the same OpenCode CLI (2.1), but needs the Go plan's key.
   { id: "opencode-go", name: "OpenCode Go", connections: ["opencode-go"] },
   { id: "google", name: "Google", connections: ["antigravity-cli"] },
+  // Standalone ACP harnesses: their own CLI runs their free models, so they need no connection, only the CLI.
+  { id: "omp", name: "OMP", connections: [], setup: "curl -fsSL https://omp.sh/install | sh" },
+  // Pi's ACP adapter advertises no MCP support, so Kestrel's tools cannot reach a Pi run.
+  { id: "pi", name: "Pi", connections: [], setup: "npm install -g @earendil-works/pi-coding-agent pi-acp", mcp: false },
+  { id: "hermes", name: "Hermes", connections: [], setup: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash" },
 ]
 
 /** The provider a message without a model runs on: the box's default harness. */
@@ -271,8 +304,20 @@ export const modelInfo = (id: AgentModel): ModelInfo => {
   return info
 }
 
+export const providerInfo = (id: ModelProvider): ModelProviderInfo => {
+  const info = MODEL_PROVIDERS.find((p) => p.id === id)
+  if (info === undefined) throw new Error(`provider ${id} is missing from MODEL_PROVIDERS`)
+  return info
+}
+
 export const providerModels = (provider: ModelProvider): readonly ModelInfo[] =>
   AGENT_MODELS.filter((m) => m.provider === provider)
+
+/**
+ * The value an ACP harness's `model` config option takes for a catalog model. OpenCode and Antigravity ids already
+ * are their harness's own; OMP, Pi and Hermes name models with their own provider prefixes, held in `acpModel`.
+ */
+export const acpModelOf = (model: AgentModel): string => modelInfo(model).acpModel ?? model
 
 /**
  * Providers on offer, in `MODEL_PROVIDERS` order: those with a connected connection, and those needing none whose

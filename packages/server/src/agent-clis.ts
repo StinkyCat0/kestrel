@@ -244,9 +244,9 @@ export interface Harness {
   /** The oldest `[major, minor]` version (`<bin> --version`) the harness works with; null when any will do. */
   readonly minVersion: readonly [number, number] | null
   /**
-   * Whether a run gets the broker's keys. A standalone harness reaches models through the broker like a vendor CLI;
-   * OpenCode (free or Go) and Antigravity run their own provider's models, so the broker's keys would only offer them
-   * models they are not there for.
+   * Whether a run gets the broker's keys. A vendor CLI or a standalone ACP harness (OMP, Pi, Hermes) reaches models
+   * through the broker like a vendor CLI; OpenCode (free or Go) and Antigravity run their own provider's models, so
+   * the broker's keys would only offer them models they are not there for.
    */
   readonly broker: boolean
 }
@@ -267,4 +267,8 @@ export const MODEL_HARNESS: Record<ModelProvider, Harness> = {
   "opencode-go": { conversation: "acp", cli: "opencode-go", bin: "opencode", minVersion: [2, 1], broker: false },
   // Sign-in from a terminal (`acp --login`) and `session/resume` arrived in 1.5.
   google: { conversation: "acp", cli: "antigravity-cli", bin: "agy", minVersion: [1, 5], broker: false },
+  // Standalone ACP harnesses speak ACP themselves and reach models through the broker's vendors channel (`core/harness.ts`).
+  omp: { conversation: "acp", cli: null, bin: "omp", minVersion: null, broker: true },
+  pi: { conversation: "acp", cli: null, bin: "pi-acp", minVersion: null, broker: true },
+  hermes: { conversation: "acp", cli: null, bin: "hermes", minVersion: null, broker: true },
 }

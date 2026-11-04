@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { availableHarnesses, type HarnessProbe } from "./capabilities"
+import { availableHarnesses, harnessAvailability, type HarnessProbe } from "./capabilities"
 
 const probe = (installed: Record<string, string>): HarnessProbe => ({
   which: (name) => (name in installed ? `/bin/${name}` : null),
@@ -66,4 +66,24 @@ test("a fake-agent box plays every harness itself", () => {
     "opencode-go",
     "google",
   ])
+})
+
+test("standalone ACP harnesses are offered by their own binary", () => {
+  expect(availableHarnesses(box, probe({ omp: "omp 18.12.6" }))).toEqual(["omp"])
+  expect(availableHarnesses(box, probe({ "pi-acp": "pi-acp 0.0.34" }))).toEqual(["pi"])
+  expect(availableHarnesses(box, probe({ hermes: "hermes 0.8.0" }))).toEqual(["hermes"])
+  expect(availableHarnesses(box, probe({ omp: "omp 18.12.6", "pi-acp": "pi-acp 0.0.34", hermes: "hermes 0.8.0" }))).toEqual([
+    "omp", "pi", "hermes",
+  ])
+})
+
+test("a missing standalone harness names its install command", () => {
+  expect(harnessAvailability("pi", box, probe({}))).toEqual({
+    available: false,
+    error: "its CLI (pi-acp) is not installed on this box; install it with: npm install -g @earendil-works/pi-coding-agent pi-acp",
+  })
+  expect(harnessAvailability("omp", box, probe({}))).toEqual({
+    available: false,
+    error: "its CLI (omp) is not installed on this box; install it with: curl -fsSL https://omp.sh/install | sh",
+  })
 })

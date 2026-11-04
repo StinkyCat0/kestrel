@@ -22,6 +22,9 @@ const PROVIDER_LABELS: Record<ModelProvider, string> = {
   opencode: "OpenCode",
   "opencode-go": "OpenCode Go",
   google: "Antigravity",
+  omp: "OMP",
+  pi: "Pi",
+  hermes: "Hermes",
 }
 
 function StateLine({ children }: { children: ReactNode }) {
