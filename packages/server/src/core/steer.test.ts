@@ -23,7 +23,8 @@ test.each([4, 0])("a message sent mid-run retains its position (initial items: %
     shadowsDir: join(root, "shadows"), runsDir: join(root, "runs"), attachmentsDir: join(root, "attachments"), homesDir: join(root, "homes"),
     agentCommands: { anthropic: "", openai: "" }, fakeAgent: false, fakeAgentRoBinds: [], sandbox: "off", sandboxPath: null,
     sandboxSslCertFile: null, systemd: null, maxConcurrentRuns: 0, relay: null, direct: null, toolkitsFlake: null,
-    taskDiskMax: 1024 ** 3, desktopBundleMs: 0, githubApiUrl: "https://api.github.com",
+    taskDiskMax: 1024 ** 3, githubApiUrl: "https://api.github.com",
+    webrtc: { iceServers: [], turn: null, policy: "all", portRange: null, hostAddresses: [], denyPrivate: false },
   }
   const configLayer = Layer.succeed(Config, config)
   const workspaceLayer = Layer.succeed(WorkspaceService, {} as never)

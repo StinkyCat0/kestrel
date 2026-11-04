@@ -94,6 +94,9 @@ export interface FileAccess {
 /** A minted box token is replaced this long before the box says it expires. */
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
+/** The desktop viewer page on the app host. Its ws URL and task id travel in the fragment, which the server never sees. */
+const DESKTOP_EMBED_PATH = "/embed/desktop";
+
 /** Typed client for the control plane and the agent box, bound to one server URL, session and active box. */
 export interface ApiClient {
   /** Stable identity for box-served cache entries; includes URL so a changed route cannot reuse old data. */
@@ -104,6 +107,13 @@ export interface ApiClient {
   fileAccess(): Promise<FileAccess>;
   /** A WebSocket URL for a box path (`Paths.*Ws`), carrying the box token when the active box is reached directly. */
   socketUrl(path: string): Promise<string>;
+  /**
+   * The WebSocket URL for a task's desktop stream, which carries its own auth: the embed page holds no session. A box
+   * token on a user box, a desktop token on the relayed box. `fresh` mints a new one.
+   */
+  desktopSocketUrl(taskId: string, options?: { fresh?: boolean }): Promise<string>;
+  /** The desktop embed page URL for a task, given the stream's ws URL from `desktopSocketUrl`. */
+  desktopEmbedUrl(taskId: string, ws: string): string;
   /** The sandboxed preview frame URL for a preview session token minted by `previewSession`. */
   previewFrameUrl(taskId: string, token: string): string;
 
@@ -203,7 +213,8 @@ export function createApiClient(
 
   // The user's box token, single-flight: concurrent callers share one mint, and a failed mint is not kept.
   let boxToken: { minted: Promise<{ token: string; expiresAt: number }>; refreshAt: number } | null = null;
-  function mintBoxToken(box: ActiveBox): Promise<{ token: string; expiresAt: number }> {
+  function mintBoxToken(box: ActiveBox, fresh = false): Promise<{ token: string; expiresAt: number }> {
+    if (fresh) boxToken = null;
     if (boxToken && Date.now() < boxToken.refreshAt) return boxToken.minted;
     const entry: { minted: Promise<{ token: string; expiresAt: number }>; refreshAt: number } = {
       refreshAt: Number.POSITIVE_INFINITY,
@@ -240,6 +251,28 @@ export function createApiClient(
       ),
     };
     fileToken = entry;
+    return entry.minted;
+  }
+
+  // A desktop token for the relayed box, single-flight per task in the same way.
+  let desktopToken: { taskId: string; minted: Promise<FileToken>; refreshAt: number } | null = null;
+  function mintDesktopToken(taskId: string, fresh: boolean): Promise<FileToken> {
+    if (!fresh && desktopToken?.taskId === taskId && Date.now() < desktopToken.refreshAt) return desktopToken.minted;
+    const entry: { taskId: string; minted: Promise<FileToken>; refreshAt: number } = {
+      taskId,
+      refreshAt: Number.POSITIVE_INFINITY,
+      minted: request(FileToken, "POST", ControlPaths.desktopToken(taskId)).then(
+        (minted) => {
+          entry.refreshAt = Date.parse(minted.expiresAt) - TOKEN_REFRESH_MARGIN_MS;
+          return minted;
+        },
+        (error: unknown) => {
+          if (desktopToken === entry) desktopToken = null;
+          throw error;
+        }
+      ),
+    };
+    desktopToken = entry;
     return entry.minted;
   }
 
@@ -305,6 +338,15 @@ export function createApiClient(
       const { token } = await mintBoxToken(activeBox);
       return `${activeBox.url.replace(/^http/, "ws")}${path}?${BOX_TOKEN_QUERY}=${encodeURIComponent(token)}`;
     },
+    desktopSocketUrl: async (taskId, options) => {
+      const path = Paths.taskDesktopWs(taskId);
+      const box = activeBox;
+      const { token } = box !== null ? await mintBoxToken(box, options?.fresh) : await mintDesktopToken(taskId, options?.fresh ?? false);
+      const base = box !== null ? box.url : serverUrl;
+      return `${base.replace(/^http/, "ws")}${path}?${BOX_TOKEN_QUERY}=${encodeURIComponent(token)}`;
+    },
+    desktopEmbedUrl: (taskId, ws) =>
+      `${serverUrl}${DESKTOP_EMBED_PATH}#ws=${encodeURIComponent(ws)}&task=${encodeURIComponent(taskId)}`,
     previewFrameUrl: (taskId, token) => (activeBox?.url ?? serverUrl) + Paths.taskPreviewFrame(token, taskId),
 
     // Control plane (served by the Worker).

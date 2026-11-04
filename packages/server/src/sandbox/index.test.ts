@@ -6,6 +6,8 @@ import { dirname, join } from "node:path"
 import { GH_SHIM_SCRIPT } from "../gh/shim"
 import { SANDBOX_HOME, buildBwrapArgv, cliBwrapArgs } from "."
 
+const base = { workspacePath: "/w", cwd: "/w", mirrorDir: "/m", homeDir: "/h", env: {}, command: "true" }
+
 /** The real thing needs a toolchain inside the nix store, the only part of the host strict shows. */
 const envPath = Bun.which("env")
 const bashPath = Bun.which("bash")
@@ -19,6 +21,24 @@ const runnable =
   shPath !== null
 
 describe("buildBwrapArgv", () => {
+  test("strict links /usr/bin/env to the toolchain's env", () => {
+    const argv = buildBwrapArgv({ ...base, level: "strict", binPath: "/nix/store/x-env/bin" })
+    const at = argv.indexOf("--symlink")
+    expect(argv.slice(at, at + 3)).toEqual(["--symlink", "/nix/store/x-env/bin/env", "/usr/bin/env"])
+  })
+
+  test("basic keeps the host's own /usr/bin/env", () => {
+    expect(buildBwrapArgv({ ...base, level: "basic", binPath: "/nix/store/x-env/bin" })).not.toContain("/usr/bin/env")
+  })
+
+  test("a desktop's audio socket is bound beside its X socket only when audio is on", () => {
+    const withAudio = buildBwrapArgv({ ...base, level: "basic", display: 101, audio: true })
+    const at = withAudio.indexOf("/tmp/.X11-unix/pulse-101")
+    expect(withAudio.slice(at - 1, at + 2)).toEqual(["--bind", "/tmp/.X11-unix/pulse-101", "/tmp/.X11-unix/pulse-101"])
+    expect(buildBwrapArgv({ ...base, level: "basic", display: 101 })).not.toContain("/tmp/.X11-unix/pulse-101")
+    expect(buildBwrapArgv({ ...base, level: "basic", audio: true })).not.toContain("/tmp/.X11-unix/pulse-101")
+  })
+
   test.skipIf(!runnable)("a strict sandbox runs the gh shim by its shebang", () => {
     const root = mkdtempSync(join(tmpdir(), "kestrel-sandbox-"))
     try {
