@@ -9,6 +9,13 @@ import {
   type ComposerEditorView,
   type GithubReferenceKind,
 } from "@cloudagents/composer/reference";
+import {
+  appCommandOf,
+  matchAppCommand,
+  withAppCommands,
+  type AppCommand,
+  type AppCommandHandlers,
+} from "@cloudagents/composer/commands";
 import Svg, { Circle } from "react-native-svg";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
@@ -347,6 +354,20 @@ export function Composer({
   const [defaultModel] = useStoredChoice("kestrel.model", AgentModel);
   const [defaultEffort] = useStoredChoice("kestrel.effort", EffortPick);
   const [choice, setChoice] = useState<{ askId: string; index: number } | undefined>();
+  // Every catalogued action runs in the app; the exhaustive map makes a new app command fail here until both hosts
+  // say what it does.
+  const appCommandHandlers: AppCommandHandlers = {
+    usage: () => navigation.push({ name: "usage" }),
+  };
+  // The screen unmounts as an app action opens; a bridge change still in flight must not restore the consumed text.
+  const handledAppCommand = useRef(false);
+  const [appCommandPending, setAppCommandPending] = useState(false);
+  const [appCommandError, setAppCommandError] = useState<unknown>();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const askOptions = ask?.options ?? [];
   const chosenIndex = choice !== undefined && choice.askId === ask?.id ? choice.index : undefined;
@@ -376,7 +397,11 @@ export function Composer({
     (trigger === "$" &&
       (expectedProvider === "openai" || (activeRunId !== undefined && activeRunProvider === undefined)));
   const slashQuery =
-    taskId !== undefined && trigger !== undefined && triggerAllowed && view.caret <= commandTokenEnd
+    (taskId !== undefined || trigger === "/") &&
+    trigger !== undefined &&
+    triggerAllowed &&
+    view.caret > 0 &&
+    view.caret <= commandTokenEnd
       ? visible.slice(1, commandTokenEnd)
       : undefined;
 
@@ -386,22 +411,25 @@ export function Composer({
   });
 
   const commandProvider = commandQuery.data?.provider ?? expectedProvider;
-  // Touching the native/web menu blurs the DOM editor before a Pressable's onPress can select a command.
-  // Like references, keep the active token available across that focus change.
-  const slashMenuOpen =
-    slashQuery !== undefined &&
-    (trigger !== "$" || commandProvider === "openai") &&
-    !dismissed;
-
-  // Codex lists its commands and skills on `/`, and only its skills on their native `$`.
+  // Codex lists its commands and skills on `/`, and only its skills on their native `$`. App actions are always
+  // listed and shadow same-named harness commands, but never a `$skill`.
   const commandMatches =
     slashQuery === undefined
       ? []
-      : (commandQuery.data?.commands ?? []).filter(
+      : withAppCommands(commandQuery.data?.commands ?? [], commandProvider).filter(
           (c) =>
             (trigger !== "$" || harnessCommandPrefix(c, commandProvider) === "$") &&
             c.name.toLowerCase().startsWith(slashQuery.toLowerCase())
         );
+
+  // Touching the native/web menu blurs the DOM editor before a Pressable's onPress can select a command.
+  // Like references, keep the active token available across that focus change.
+  // A new thread has no harness to ask, so nothing beyond the app's own commands can match there.
+  const slashMenuOpen =
+    slashQuery !== undefined &&
+    (trigger !== "$" || commandProvider === "openai") &&
+    (taskId !== undefined || commandMatches.length > 0) &&
+    !dismissed;
   const selectedCommand = commandMatches[activeCommandIndex % commandMatches.length];
   const referenceTrigger = findGithubReferenceTrigger(view.referenceText, view.caret);
   // A repository sheet or a touch choice takes focus from the editor; keep the active token available until chosen.
@@ -412,12 +440,44 @@ export function Composer({
   useEffect(() => setActiveCommandIndex(0), [slashQuery, taskId, model?.id, activeRunId]);
 
   function edit(next: ComposerEditorView) {
+    // An app action has already persisted the remainder and is opening its screen; ignore echoes of the old draft.
+    if (handledAppCommand.current) return;
     if (next.markdown !== text) setText(next.markdown);
     if (next.markdown !== view.markdown || next.caret !== view.caret) setDismissed(false);
     setView(next);
   }
 
+  /** Keep the live remainder durable before opening a screen that unmounts this editor. */
+  async function runAppCommand(command: AppCommand, markdown: string, consumed: number): Promise<boolean> {
+    if (handledAppCommand.current) return true;
+    handledAppCommand.current = true;
+    setAppCommandPending(true);
+    setAppCommandError(undefined);
+    try {
+      await setText(markdown.slice(consumed));
+      if (mounted.current) appCommandHandlers[command.name]();
+      return true;
+    } catch (error) {
+      if (!mounted.current) return true;
+      handledAppCommand.current = false;
+      setAppCommandPending(false);
+      setAppCommandError(error);
+      return false;
+    }
+  }
+
+  async function selectAppCommand(name: AppCommand["name"], next: ComposerEditorView) {
+    const match = matchAppCommand(next.markdown, name);
+    return match === undefined ? false : runAppCommand(match.command, next.markdown, match.consumed);
+  }
+
   function chooseCommand(command: HarnessCommand) {
+    // App actions run on selection instead of completing the draft; they win over a same-named harness command.
+    const appCommand = appCommandOf(command, commandProvider);
+    if (appCommand !== undefined) {
+      editor.current?.requestAppCommand(appCommand.name);
+      return;
+    }
     const prefix = harnessCommandPrefix(command, commandQuery.data?.provider);
     const gap = /^\s*/.exec(visible.slice(commandTokenEnd))?.[0].length ?? 0;
     editor.current?.replaceRange(0, commandTokenEnd + gap, `${prefix}${command.name} `);
@@ -461,6 +521,16 @@ export function Composer({
   const empty = text.trim() === "" && chosenOption === undefined;
 
   async function submit(next: ComposerEditorView) {
+    // A typed app command runs in the app even with the menu closed or a turn active; it never reaches the agent.
+    // With a picked answer the message answers the question, exactly as before.
+    if (chosenOption === undefined) {
+      const appCommand = matchAppCommand(next.markdown);
+      if (appCommand !== undefined) {
+        // Re-enter the DOM to lock and capture again; ordinary Send must not blur or disable the editor.
+        editor.current?.requestAppCommand(appCommand.command.name);
+        return;
+      }
+    }
     // Capture the DOM's current Markdown at the button press, not an earlier native bridge acknowledgement.
     const body = [chosenOption ?? "", next.markdown.trim()].filter(Boolean).join("\n\n");
     if (body === "" || pending) return;
@@ -490,6 +560,7 @@ export function Composer({
   return (
     <View style={styles.wrap}>
       {error ? <Alert>{errorText(error)}</Alert> : null}
+      {appCommandError ? <Alert>{errorText(appCommandError)}</Alert> : null}
       {referenceMenuOpen && referenceTrigger !== undefined ? (
         <GithubReferenceMenu
           number={referenceTrigger.number}
@@ -529,6 +600,7 @@ export function Composer({
             onBlur={async () => setFocused(false)}
             onMenuKey={menuKey}
             onSubmit={submit}
+            onAppCommand={selectAppCommand}
             // The DOM WebView defaults its container to flex: 1, which collapses inside this auto-height box.
             // Let matchContents supply the outer height, with the WebView filling that measured container.
             dom={{ matchContents: true, scrollEnabled: false, containerStyle: { flex: 0 }, style: { flex: 1 } }}
@@ -545,21 +617,13 @@ export function Composer({
             <ThinkingPicker value={effort} options={effortOptions} onChange={setPickedEffort} />
           ) : null}
           <View style={styles.flex} />
-          {slashMenuOpen && selectedCommand !== undefined ? (
-            <Button
-              icon={Check}
-              accessibilityLabel="Select command"
-              onPress={() => chooseCommand(selectedCommand)}
-            >
-              Select
-            </Button>
-          ) : onStop && empty ? (
+          {onStop && empty && !appCommandPending ? (
             <Button size="icon" accessibilityLabel="Stop" disabled={stopping} onPress={onStop}>
               <Square size={14} color={colors.primaryForeground} fill={colors.primaryForeground} />
             </Button>
           ) : (
-            <Button size="icon" accessibilityLabel="Send" disabled={pending || empty || !draftReady} onPress={() => editor.current?.requestSubmit()}>
-              {pending ? (
+            <Button size="icon" accessibilityLabel="Send" disabled={pending || appCommandPending || empty || !draftReady} onPress={() => editor.current?.requestSubmit()}>
+              {pending || appCommandPending ? (
                 <ActivityIndicator size="small" color={colors.primaryForeground} />
               ) : (
                 <ArrowUp size={16} color={colors.primaryForeground} />
