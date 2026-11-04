@@ -13,6 +13,7 @@ const commands = {
   openai: "codex app-server",
   openrouter: "claude -p",
   zai: "claude -p",
+  deepseek: "claude -p",
   opencode: `OPENCODE_CONFIG_CONTENT='{"share": "disabled", "update": "disable"}' opencode acp`,
   omp: "omp acp",
   pi: "pi-acp",
