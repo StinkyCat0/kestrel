@@ -15,6 +15,7 @@ const commands = {
   zai: "claude -p",
   deepseek: "claude -p",
   minimax: "claude -p",
+  moonshot: "claude -p",
   opencode: `OPENCODE_CONFIG_CONTENT='{"share": "disabled", "update": "disable"}' opencode acp`,
   omp: "omp acp",
   pi: "pi-acp",
