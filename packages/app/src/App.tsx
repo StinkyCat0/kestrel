@@ -22,6 +22,7 @@ import {
   FleetSettings,
   ProfileSettings,
   SettingsLayout,
+  ThreadsSettings,
 } from "@/pages/SettingsPage"
 import { ThreadPage } from "@/pages/ThreadPage"
 import { WorkspaceLayout } from "@/pages/WorkspaceLayout"
@@ -61,6 +62,7 @@ export function App() {
             <Route index element={<Navigate to="profile" replace />} />
             <Route path="profile" element={<ProfileSettings />} />
             <Route path="connections" element={<ConnectionsSettings />} />
+            <Route path="threads" element={<ThreadsSettings />} />
             <Route path="boxes" element={<BoxesSettings />} />
             <Route path="fleet" element={<FleetSettings />} />
             <Route path="billing" element={<BillingSettings />} />
