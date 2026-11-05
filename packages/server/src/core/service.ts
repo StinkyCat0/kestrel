@@ -38,6 +38,7 @@ import {
   providerModels,
   DEFAULT_TEXT_GENERATION_SETTINGS,
   type TextGenerationSettings,
+  type ThreadSettings,
 } from "@cloudagents/protocol"
 import { MODEL_HARNESS } from "../agent-clis"
 import { CliAuth } from "../cliauth"
@@ -63,6 +64,9 @@ import { runImageFile } from "./run-images"
 import { checkoutPinRef, iconMimeType, WorkspaceService, type CheckoutSpec } from "./workspace"
 import { STORAGE_CHECK_MS, STORAGE_GROWTH_SLACK, diskUsage, formatBytes } from "./storage"
 import { readTextGenerationSettings, writeTextGenerationSettings } from "./text-generation-settings"
+import { readThreadSettings, writeThreadSettings } from "./thread-settings"
+import { makeUsageLimitRecovery, USAGE_LIMIT_SWEEP } from "./usage-limit-recovery"
+import { USAGE_LIMIT_RESUME_MESSAGE } from "./usage-limits"
 import { makeTextGenerator, mayReplaceTitle, pendingTitleRequest } from "./text-generation"
 
 const PREVIEW_SELECTOR_SCRIPT = `<script>(() => {
@@ -288,6 +292,13 @@ export interface CoreShape {
     user: string,
     settings: TextGenerationSettings,
   ) => Effect.Effect<TextGenerationSettings, InternalError>
+  /** The signed-in user's thread preferences on this box. */
+  readonly getThreadSettings: (user: string) => Effect.Effect<ThreadSettings, InternalError>
+  /** Saves and returns the thread preferences as stored. */
+  readonly setThreadSettings: (
+    user: string,
+    settings: ThreadSettings,
+  ) => Effect.Effect<ThreadSettings, InternalError>
 
   // Every browser-facing operation takes the signed-in `user`. A thread and its runs, checkouts and desktop exist
   // only for the thread's owner: anyone else gets NotFound, never a hint it exists.
@@ -341,6 +352,15 @@ export interface CoreShape {
     attachmentIds: ReadonlyArray<string>,
     dev: boolean,
   ) => Effect.Effect<SendMessageResponse, NotFound | Conflict | BadRequest | InternalError>
+  /**
+   * Turns a thread's armed usage-limit auto-resume on or off. The arm stays either way so the notice keeps the reset
+   * and the user can turn it back on for this thread; a thread with no arm is a Conflict.
+   */
+  readonly setUsageLimitAutoResume: (
+    user: string,
+    taskId: string,
+    autoResume: boolean,
+  ) => Effect.Effect<Task, NotFound | Conflict | InternalError>
   /**
    * Used by the MCP handler (`thread_send`): delivers an agent's message to another thread of the same owner. It joins
    * that thread's running run (read with task_inbox) or starts a run that resumes the thread's agent session. It never
@@ -1285,6 +1305,8 @@ export const CoreLive = Layer.effect(
       dev: boolean,
       from: FromThread | null,
       deliveryId?: string,
+      /** Automatic deliveries only: refuse unless this is still the thread's latest run (see the sweep's arm). */
+      expectRunId?: string,
     ): Effect.Effect<SendMessageResponse, NotFound | Conflict | BadRequest | InternalError> =>
       Effect.gen(function* () {
         yield* ownedTask(user, taskId)
@@ -1349,6 +1371,14 @@ export const CoreLive = Layer.effect(
             }
             if (task.archivedAt !== undefined) {
               return Either.left(new Conflict({ message: "task is archived; unarchive it first" }))
+            }
+            if (expectRunId !== undefined) {
+              // Checked in the same update that reserves the run: a user reply that landed since the sweep must not
+              // have the continuation steered into its run.
+              const last = [...s.runs].reverse().find((r) => r.taskId === taskId)
+              if (last?.id !== expectRunId) {
+                return Either.left(new Conflict({ message: "the thread moved on; auto-resume was not started" }))
+              }
             }
             // A replay needs its own run: it must not land in a running run's inbox or answer its
             // question. Refused here, inside the same update that checks for a running run.
@@ -1572,6 +1602,24 @@ export const CoreLive = Layer.effect(
     const sendMessage: CoreShape["sendMessage"] = (user, taskId, text, choice, attachmentIds, dev) =>
       deliverMessage(user, taskId, text, choice, attachmentIds, dev, null)
 
+    const setUsageLimitAutoResume: CoreShape["setUsageLimitAutoResume"] = (user, taskId, autoResume) =>
+      Effect.gen(function* () {
+        yield* ownedTask(user, taskId)
+        const updated = yield* store.update((s): Either.Either<Task, NotFound | Conflict> => {
+          const found = findTask(s, taskId)
+          if (Either.isLeft(found)) return Either.left(found.left)
+          const task = found.right
+          const arm = task.usageLimitResume
+          if (arm === undefined) {
+            return Either.left(new Conflict({ message: "this thread is not waiting on a usage limit" }))
+          }
+          if (arm.autoResume !== autoResume) task.usageLimitResume = { ...arm, autoResume }
+          return Either.right({ ...task })
+        })
+        hub.publish({ _tag: "task.updated", task: updated })
+        return updated
+      })
+
     /**
      * The choice a run started by another agent's message runs with: the provider of the thread's latest session,
      * or of its latest run when that run never named a session (a failed launch still says which CLI the thread
@@ -1587,6 +1635,38 @@ export const CoreLive = Layer.effect(
       const model = providerModels(provider).find((m) => m.shownByDefault)?.id
       return model === undefined ? {} : { model }
     }
+
+    const usageLimitRecovery = makeUsageLimitRecovery({
+      store,
+      publish: (task) => hub.publish({ _tag: "task.updated", task }),
+      settings: (user) => readThreadSettings(config.dataDir, user),
+      items: (runId) => harness.items(runId),
+      providerUsage: (user, fresh) => cliAuth.providerUsage(user, fresh),
+      deliver: (task, run, deliveryId) =>
+        Effect.asVoid(
+          deliverMessage(
+            task.owner,
+            task.id,
+            USAGE_LIMIT_RESUME_MESSAGE,
+            {
+              ...(run.model === undefined ? {} : { model: run.model }),
+              ...(run.effort === null || run.effort === undefined ? {} : { effort: run.effort }),
+            },
+            [],
+            false,
+            null,
+            deliveryId,
+            run.id,
+          ),
+        ),
+    })
+
+    yield* Effect.forkDaemon(
+      usageLimitRecovery.sweep.pipe(
+        Effect.catchAllCause((cause) => Effect.logWarning(`usage-limit sweep failed: ${Cause.pretty(cause)}`)),
+        Effect.repeat(Schedule.spaced(USAGE_LIMIT_SWEEP)),
+      ),
+    )
 
     const sendToThread: CoreShape["sendToThread"] = (fromTaskId, toTaskId, text) =>
       Effect.gen(function* () {
@@ -1692,6 +1772,8 @@ export const CoreLive = Layer.effect(
           for (const task of s.tasks) {
             if (task.delegation?.runId && ids.includes(task.delegation.runId)) {
               task.delegation = { ...task.delegation, cancelledAt: task.delegation.cancelledAt ?? nowIso() }
+              // A cancelled delegated thread must not wake at a usage-limit reset and run for a parent that stopped it.
+              delete task.usageLimitResume
               if (task.status === "needs_input") task.status = "idle"
               task.updatedAt = nowIso()
               changed.push({ ...task })
@@ -1708,6 +1790,14 @@ export const CoreLive = Layer.effect(
       Effect.gen(function* () {
         const status = yield* delegatedStatus(parentTaskId, childTaskId)
         if (status.run && (status.run.status === "running" || status.waitingForChildren || status.task.status === "needs_input")) yield* cancelDelegatedTree(status.run.id)
+        // A child that already failed (on a usage limit, say) is not in the running tree; its arm goes here.
+        const cleared = yield* store.update((s) => {
+          const child = s.tasks.find((t) => t.id === childTaskId)
+          if (child?.usageLimitResume === undefined) return Either.right(null)
+          delete child.usageLimitResume
+          return Either.right({ ...child })
+        })
+        if (cleared !== null) hub.publish({ _tag: "task.updated", task: cleared })
         return yield* delegatedStatus(parentTaskId, childTaskId)
       })
 
@@ -2002,6 +2092,8 @@ export const CoreLive = Layer.effect(
       health: () => Effect.void,
       getTextGenerationSettings: (user) => readTextGenerationSettings(config.dataDir, user),
       setTextGenerationSettings: (user, settings) => writeTextGenerationSettings(config.dataDir, user, settings),
+      getThreadSettings: (user) => readThreadSettings(config.dataDir, user),
+      setThreadSettings: (user, settings) => writeThreadSettings(config.dataDir, user, settings),
 
       listTasks: (user) =>
         Effect.map(store.read, (state) =>
@@ -2119,6 +2211,7 @@ export const CoreLive = Layer.effect(
         }),
 
       sendMessage,
+      setUsageLimitAutoResume,
       githubActivity,
       sendToThread,
 

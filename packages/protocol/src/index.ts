@@ -90,6 +90,21 @@ export type Delegation = typeof Delegation.Type
 export type ContextUsage = typeof ContextUsage.Type
 
 /**
+ * A failed run whose provider usage limit is armed to resume the thread when the window resets. The box sets it after
+ * a usage-limit failure that names a provider-reported reset, whether or not auto-resume is on: `autoResume` is the
+ * user's switch at arm time, and the thread's notice lets them change it for this one failure.
+ */
+export const UsageLimitResume = Schema.Struct({
+  /** The failed run this arm belongs to: a newer run means the thread already continued. */
+  runId: Schema.String,
+  /** When the provider's exhausted window resets, as the provider reported it. */
+  resetsAt: Schema.String,
+  /** Whether this thread resumes by itself at the reset; off leaves it failed for the user. */
+  autoResume: Schema.Boolean,
+})
+export type UsageLimitResume = typeof UsageLimitResume.Type
+
+/**
  * A thread = one chat + one workspace directory + (optional) one desktop. It starts with no repository;
  * the agent checks repositories out into the workspace as the work needs them.
  */
@@ -115,6 +130,8 @@ export const Task = Schema.Struct({
   context: Schema.optional(ContextUsage),
   /** Present for a thread created as delegated work. */
   delegation: Schema.optional(Delegation),
+  /** Present while a usage-limit failure is waiting for its provider window to reset. */
+  usageLimitResume: Schema.optional(UsageLimitResume),
 })
 
 /** Short-lived bearer used by a sandboxed preview frame; grants access only to its own task preview. */
@@ -489,6 +506,18 @@ export const DEFAULT_TEXT_GENERATION_SETTINGS: TextGenerationSettings = {
   responseStreamingMode: "paragraph",
 }
 
+/** Per-user, per-box preferences for how threads run, apart from generated text. */
+export const ThreadSettings = Schema.Struct({
+  /**
+   * After a run fails on its provider's usage limit, resume the thread with "Continue where you left off." when the
+   * provider reports the exhausted window's reset. Off leaves the thread failed for the user to retry.
+   */
+  autoResumeAfterUsageLimits: Schema.optionalWith(Schema.Boolean, { default: () => false }),
+})
+export type ThreadSettings = typeof ThreadSettings.Type
+
+export const DEFAULT_THREAD_SETTINGS: ThreadSettings = { autoResumeAfterUsageLimits: false }
+
 export const CreateTaskBody = Schema.Struct({
   title: Schema.optional(Schema.String),
   /** Opt into an agent-generated title; an explicit title remains the provisional label until it arrives. */
@@ -499,6 +528,10 @@ export const CreateTaskBody = Schema.Struct({
   pickedRepo: Schema.optional(RepoRef),
 })
 export type CreateTaskBody = typeof CreateTaskBody.Type
+
+/** Whether the thread's armed usage-limit auto-resume should run at the provider's reset. */
+export const SetUsageLimitAutoResumeBody = Schema.Struct({ autoResume: Schema.Boolean })
+export type SetUsageLimitAutoResumeBody = typeof SetUsageLimitAutoResumeBody.Type
 
 export const SendMessageBody = Schema.Struct({
   /** May be empty when `attachments` is not. */
@@ -771,6 +804,8 @@ export const Paths = {
   capabilities: "/api/capabilities",
   /** GET / PUT TextGenerationSettings: the signed-in user's preferences on this box. */
   textGenerationSettings: "/api/settings/text-generation",
+  /** GET / PUT ThreadSettings: the signed-in user's thread preferences on this box. */
+  threadSettings: "/api/settings/threads",
   /** POST a browser's `WebRtcOffer` (box token) -> `WebRtcAnswer`: opens the direct data channel of a user box. */
   webrtcOffer: "/api/webrtc/offer",
   /** GET -> Usage of the signed-in user in the current billing period. */
@@ -788,6 +823,8 @@ export const Paths = {
   taskRuns: (id: string) => `/api/tasks/${id}/runs`,
   /** POST cancels a child delegation and its descendants, returning the child thread. */
   taskDelegationCancel: (id: string, childId: string) => `/api/tasks/${id}/delegations/${childId}/cancel`,
+  /** PUT SetUsageLimitAutoResumeBody -> Task: turns the thread's armed auto-resume on or off. */
+  taskUsageLimit: (id: string) => `/api/tasks/${id}/usage-limit`,
   taskDiff: (id: string) => `/api/tasks/${id}/diff`,
   taskFiles: (id: string) => `/api/tasks/${id}/files`,
   /**
