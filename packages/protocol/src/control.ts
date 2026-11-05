@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { GithubRepoSlug } from "./refs"
 import { AgentModel, type ModelProvider } from "./models"
+import { NestBoxStatus } from "./nest"
 
 /**
  * Control-plane API served by the Worker itself (not relayed to the box).
@@ -171,6 +172,22 @@ export const ControlPaths = {
   boxAutomation: (id: string) => `/box/automations/${id}`,
   /** POST: GitHub repository webhook receiver. No session; authenticated by X-Hub-Signature-256. */
   githubWebhook: "/webhooks/github",
+  /**
+   * Nest host only: WebSocket upgrade with `Authorization: Bearer <host secret>` and NEST_HOST_ID_HEADER (the host id
+   * and secret of its `meterHosts` registration). Carries NestHostFrame up and NestControlFrame down; see `nest.ts`.
+   */
+  nestHostConnect: "/nest/hosts/connect",
+  /** Box-only, no session: POST NestEnrollBody -> NestEnrollResult. A new Nest box trades its one-time token for its secret. */
+  nestEnroll: "/box/nest/enroll",
+  /** POST CreateNestBoxBody -> UserBox (with `nest`): places and creates a Nest box for the signed-in user. */
+  nestBoxes: "/api/nest/boxes",
+  /** POST (no body) -> UserBox: asks the box's host to resume or suspend it. Owner only; 404 otherwise. */
+  nestBoxResume: (boxId: string) => `/api/nest/boxes/${encodeURIComponent(boxId)}/resume`,
+  nestBoxSuspend: (boxId: string) => `/api/nest/boxes/${encodeURIComponent(boxId)}/suspend`,
+  /** PUT NestLimits -> UserBox: changes the box's limits (its shape). Owner only. */
+  nestBoxLimits: (boxId: string) => `/api/nest/boxes/${encodeURIComponent(boxId)}/limits`,
+  /** Operator-only: GET -> NestHostList. Everyone else gets 404. */
+  nestHosts: "/api/nest/hosts",
 } as const
 
 /** Header the control plane's box routes read the acting user's login from; the box sets it, never a browser. */
@@ -397,6 +414,8 @@ export const UserBox = Schema.Struct({
   name: BoxName,
   url: BoxUrl,
   createdAt: Schema.String,
+  /** Set when the box is a Nest VM: its state and size. Absent for a user's own machine. */
+  nest: Schema.optional(NestBoxStatus),
 })
 export type UserBox = typeof UserBox.Type
 
