@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers"
-import { Option, Schema } from "effect"
+import { Either, Option, Schema } from "effect"
 import {
   CREDENTIALS_HEADER,
   ControlPaths,
@@ -18,6 +18,10 @@ import {
   encodeFrame,
   fromBase64,
   toBase64,
+  decodeNestHostFrame,
+  MAX_NEST_FRAME_BYTES,
+  NEST_HOST_ID_HEADER,
+  NEST_HOST_PROTOCOL,
   type ApprovePairingBody,
   type Automation,
   type AutomationRun,
@@ -55,6 +59,12 @@ import {
   type MeterIngestResult,
   type MeterReport,
   type MeterReportBody,
+  type CreateNestBoxBody,
+  type NestControlFrame,
+  type NestEnrollBody,
+  type NestEnrollResult,
+  type NestHostList,
+  type NestLimits,
 } from "@cloudagents/protocol"
 import { errorResponse, headersToRecord, isHopByHop, safeEqual } from "./http"
 import { fetchPullRequest, matchGithubTrigger, type PullRequestEvent, type PullRequestInfo } from "./github"
@@ -104,6 +114,9 @@ import {
 import { reconcileMeter } from "./meter-reconcile"
 import { commonToolFailures, ensureToolFailuresTable, recordToolFailures } from "./tool-failures-table"
 import { deleteBoxActivity, ensureBoxActivityTable, fleetActivity, recordBoxActivity } from "./activity-table"
+import { NestFleet, type NestOutcome } from "./nest-fleet"
+import { ensureNestTables } from "./nest-table"
+import { NEST_STANDARD_LIMITS, newSecret, nestLimitsError, publicUrlFor } from "./nest-control"
 
 /** A failed box call: the HTTP status and error body the Worker answers with. */
 export type BoxFailure = { ok: false; status: number; tag: string; message: string }
@@ -120,10 +133,8 @@ const INVALID_METER_HOST: BoxFailure = {
   tag: "Unauthorized",
   message: "invalid meter host credentials",
 }
-
-/** 32 random bytes, base64url: a box secret, or the id a pairing is polled with. */
-const newSecret = (): string =>
-  toBase64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+const NEST_DISABLED: BoxFailure = { ok: false, status: 404, tag: "NotFound", message: "Nest is not enabled" }
+const NO_NEST_CAPACITY: BoxFailure = { ok: false, status: 503, tag: "NoCapacity", message: "no Nest host has room for a new box" }
 
 /** Pairing codes: 8 characters from 32 symbols with no 0, O, 1 or I. 32 divides 256, so each byte is unbiased. */
 const PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -145,6 +156,14 @@ const newPairingCode = (): string =>
  */
 
 const BOX_TAG = "box"
+const NEST_HOST_TAG = "nest-host"
+
+/** Longest an automation call waits for a Nest box to report `running`, and how often it checks. */
+const NEST_WAKE_TIMEOUT_MS = 60_000
+const NEST_WAKE_POLL_MS = 1_000
+/** A Nest host socket's attachment: the host, whether its `hello` was accepted, and whether a newer socket replaced it. */
+type NestAttachment = { hostId: string; hello: boolean; retired?: boolean }
+const nestAttachment = (ws: WebSocket): NestAttachment | null => ws.deserializeAttachment() as NestAttachment | null
 const HTTP_TIMEOUT_MS = 30_000
 /** Lifetime of a token the Hub signs for one call to a managed box. */
 const MANAGED_CALL_TTL_SECONDS = 5 * 60
@@ -279,8 +298,18 @@ export class Hub extends DurableObject<Env> {
   private readonly streams = new Map<number, WebSocket>()
   private nextId = 1
 
+  private readonly nest: NestFleet
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
+    this.nest = new NestFleet(
+      ctx.storage.sql,
+      {
+        send: (hostId, frame) => this.sendNestFrame(hostId, frame),
+        connected: (hostId) => this.nestSocket(hostId) !== null,
+      },
+      env.KESTREL_NEST_DOMAIN ?? "",
+    )
     void ctx.blockConcurrencyWhile(async () => {
       const sql = ctx.storage.sql
       sql.exec(`CREATE TABLE IF NOT EXISTS users (
@@ -295,6 +324,7 @@ export class Hub extends DurableObject<Env> {
       }
       ensureFleetTable(sql)
       ensureMeterTables(sql)
+      ensureNestTables(sql)
       ensureToolFailuresTable(sql)
       ensureBoxActivityTable(sql)
       sql.exec(`CREATE TABLE IF NOT EXISTS sessions (
@@ -571,7 +601,7 @@ export class Hub extends DurableObject<Env> {
   }
 
   /** The one insertion path for a new box: `createBox` and pairing approval share it (same limit, new secret). */
-  private insertBox(login: string, body: CreateBoxBody): BoxOutcome<CreatedBox> {
+  private insertBox(login: string, body: CreateBoxBody, id = crypto.randomUUID()): BoxOutcome<CreatedBox> {
     const sql = this.ctx.storage.sql
     const count =
       sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM user_boxes WHERE login = ?", login).toArray()[0]
@@ -579,7 +609,7 @@ export class Hub extends DurableObject<Env> {
     if (count >= MAX_USER_BOXES) {
       return { ok: false, status: 409, tag: "Conflict", message: `at most ${MAX_USER_BOXES} boxes per user` }
     }
-    const box: UserBox = { id: crypto.randomUUID(), name: body.name, url: body.url, createdAt: new Date().toISOString() }
+    const box: UserBox = { id, name: body.name, url: body.url, createdAt: new Date().toISOString() }
     const secret = newSecret()
     sql.exec(
       "INSERT INTO user_boxes (id, login, name, url, secret, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -598,6 +628,9 @@ export class Hub extends DurableObject<Env> {
     if (!session) return UNAUTHENTICATED
     const owned = this.ownedBox(session.login, id)
     if (!owned) return NO_SUCH_BOX
+    if (changes.url !== undefined && changes.url !== owned.box.url && this.nest.isNestBox(id)) {
+      return { ok: false, status: 400, tag: "BadRequest", message: "a Nest box's URL is set by its host" }
+    }
     const box: UserBox = { ...owned.box, name: changes.name ?? owned.box.name, url: changes.url ?? owned.box.url }
     this.ctx.storage.sql.exec(
       "UPDATE user_boxes SET name = ?, url = ? WHERE id = ? AND login = ?",
@@ -609,10 +642,15 @@ export class Hub extends DurableObject<Env> {
     return { ok: true, value: box }
   }
 
-  deleteBox(sessionId: string, id: string): BoxOutcome<null> {
+  async deleteBox(sessionId: string, id: string): Promise<BoxOutcome<null>> {
     const session = this.session(sessionId)
     if (!session) return UNAUTHENTICATED
     if (!this.ownedBox(session.login, id)) return NO_SUCH_BOX
+    if (this.nest.isNestBox(id)) {
+      const outcome = this.nest.destroy(session.login, id)
+      if (outcome.ok) await this.rearm()
+      return outcome
+    }
     const sql = this.ctx.storage.sql
     sql.exec("UPDATE users SET active_box_id = NULL WHERE login = ? AND active_box_id = ?", session.login, id)
     sql.exec("DELETE FROM user_boxes WHERE id = ? AND login = ?", id, session.login)
@@ -671,12 +709,92 @@ export class Hub extends DurableObject<Env> {
     return { ok: true, value: this.boxList(session.login) }
   }
 
+  // -------------------------------------------------------------------------
+  // Nest boxes: a user's VM on a Nest host. The fleet (`nest-fleet.ts`) owns placement and commands; these map its
+  // outcomes onto the box list the apps show.
+  // -------------------------------------------------------------------------
+
+  async createNestBox(sessionId: string, body: CreateNestBoxBody): Promise<BoxOutcome<UserBox>> {
+    const session = this.session(sessionId)
+    if (!session) return UNAUTHENTICATED
+    const domain = this.env.KESTREL_NEST_DOMAIN
+    if (!domain) return NEST_DISABLED
+    const limits = body.limits ?? NEST_STANDARD_LIMITS
+    const shape = nestLimitsError(limits)
+    if (shape !== null) return { ok: false, status: 400, tag: "BadRequest", message: shape }
+    const enroll = await this.nest.mintEnrollToken()
+    const target = this.nest.placement(null)
+    if (target === null) return NO_NEST_CAPACITY
+    const id = crypto.randomUUID()
+    const created = this.insertBox(session.login, { name: body.name, url: publicUrlFor(id, target.slug, domain) }, id)
+    if (!created.ok) return created
+    this.nest.createBox(id, session.login, target, limits, enroll)
+    await this.rearm()
+    return this.userBoxView(session.login, id)
+  }
+
+  async resumeNestBox(sessionId: string, id: string): Promise<BoxOutcome<UserBox>> {
+    return this.nestAction(sessionId, id, (login) => this.nest.resume(login, id))
+  }
+
+  async suspendNestBox(sessionId: string, id: string): Promise<BoxOutcome<UserBox>> {
+    return this.nestAction(sessionId, id, (login) => this.nest.suspend(login, id))
+  }
+
+  async parkNestBox(sessionId: string, id: string): Promise<BoxOutcome<UserBox>> {
+    return this.nestAction(sessionId, id, (login) => this.nest.park(login, id))
+  }
+
+  async attachNestGpu(sessionId: string, id: string): Promise<BoxOutcome<UserBox>> {
+    return this.nestAction(sessionId, id, (login) => this.nest.gpu(login, id, true))
+  }
+
+  async detachNestGpu(sessionId: string, id: string): Promise<BoxOutcome<UserBox>> {
+    return this.nestAction(sessionId, id, (login) => this.nest.gpu(login, id, false))
+  }
+
+  async setNestLimits(sessionId: string, id: string, limits: NestLimits): Promise<BoxOutcome<UserBox>> {
+    const shape = nestLimitsError(limits)
+    if (shape !== null) return { ok: false, status: 400, tag: "BadRequest", message: shape }
+    return this.nestAction(sessionId, id, (login) => this.nest.setLimits(login, id, limits))
+  }
+
+  nestHostList(): NestHostList {
+    return { hosts: this.nest.hostList() }
+  }
+
+  nestEnroll(body: NestEnrollBody): Promise<NestEnrollResult | null> {
+    return this.nest.enroll(body)
+  }
+
+  private async nestAction(
+    sessionId: string,
+    id: string,
+    act: (login: string) => NestOutcome<null> | Promise<NestOutcome<null>>,
+  ): Promise<BoxOutcome<UserBox>> {
+    const session = this.session(sessionId)
+    if (!session) return UNAUTHENTICATED
+    const outcome = await act(session.login)
+    if (!outcome.ok) return outcome
+    await this.rearm()
+    return this.userBoxView(session.login, id)
+  }
+
+  /** A box the owner holds, with its Nest status when it is a Nest box. */
+  private userBoxView(login: string, id: string): BoxOutcome<UserBox> {
+    const owned = this.ownedBox(login, id)
+    if (!owned) return NO_SUCH_BOX
+    const nest = this.nest.statusesOf(login).get(id)
+    return { ok: true, value: nest === undefined ? owned.box : { ...owned.box, nest } }
+  }
+
   /** The box's owner and their connection secrets for `ControlPaths.boxSelf`; null unless `secret` is the box's. */
   async boxSelf(boxId: string, secret: string): Promise<BoxSelf | null> {
     const row = this.ctx.storage.sql
       .exec<{ login: string; secret: string }>("SELECT login, secret FROM user_boxes WHERE id = ?", boxId)
       .toArray()[0]
     if (!row || !(await safeEqual(secret, row.secret))) return null
+    this.nest.markEnrolled(boxId)
     return {
       owner: row.login,
       credentialsVersion: this.credentialsVersion(row.login),
@@ -695,9 +813,13 @@ export class Hub extends DurableObject<Env> {
     const user = sql
       .exec<{ activeBoxId: string | null }>("SELECT active_box_id AS activeBoxId FROM users WHERE login = ?", login)
       .toArray()[0]
+    const nests = this.nest.statusesOf(login)
     const managed = managedBoxFor(sql, login)
     return {
-      boxes,
+      boxes: boxes.map((box) => {
+        const nest = nests.get(box.id)
+        return nest === undefined ? box : { ...box, nest }
+      }),
       activeBoxId: user?.activeBoxId ?? null,
       managedBox: managed === null ? null : { id: managed.id, url: managed.url },
     }
@@ -1002,8 +1124,10 @@ export class Hub extends DurableObject<Env> {
   // -------------------------------------------------------------------------
 
   boxCall(login: string, method: "GET" | "POST", path: string, payload?: unknown): Promise<BoxResult> {
+    const nestId = this.activeNestBox(login)
+    if (nestId !== null) return this.nestBoxCall(login, nestId, method, path, payload)
     const managed = managedBoxFor(this.ctx.storage.sql, login)
-    if (managed !== null) return this.managedBoxCall(managed, login, method, path, payload)
+    if (managed !== null) return this.directBoxCall(managed, login, method, path, payload)
     const box = this.ctx.getWebSockets(BOX_TAG)[0]
     if (!box) {
       return Promise.resolve({ ok: false, status: 503, body: JSON.stringify({ message: "agent box is not connected" }) })
@@ -1024,11 +1148,43 @@ export class Hub extends DurableObject<Env> {
     return this.request(box, frame).then(async (res) => ({ ok: res.ok, status: res.status, body: await res.text() }))
   }
 
+  /** The user's active box when it is a Nest box they own; automation work for them goes there. */
+  private activeNestBox(login: string): string | null {
+    const id =
+      this.ctx.storage.sql.exec<{ id: string | null }>("SELECT active_box_id AS id FROM users WHERE login = ?", login).toArray()[0]?.id ?? null
+    return id !== null && this.nest.isNestBox(id) && this.ownedBox(login, id) !== null ? id : null
+  }
+
   /**
-   * One request straight to the user's managed box, with a short token for `login`. The box fetches the user's
+   * A call to a Nest box: the box is resumed and the call waits for it to report `running`. The URL and secret are read
+   * after the wake, since a wake can place the box on another host.
+   */
+  private async nestBoxCall(login: string, id: string, method: "GET" | "POST", path: string, payload?: unknown): Promise<BoxResult> {
+    if (!(await this.wakeNestBox(login, id))) {
+      return { ok: false, status: 503, body: JSON.stringify({ message: "Nest box did not wake" }) }
+    }
+    const owned = this.ownedBox(login, id)
+    if (!owned) return { ok: false, status: 404, body: JSON.stringify({ message: "no such box" }) }
+    return this.directBoxCall({ id, url: owned.box.url, secret: owned.secret }, login, method, path, payload)
+  }
+
+  /** Resumes the box and polls until it reports `running`; false when that does not happen within NEST_WAKE_TIMEOUT_MS. */
+  private async wakeNestBox(login: string, id: string): Promise<boolean> {
+    if (!(await this.nest.resume(login, id)).ok) return false
+    await this.rearm()
+    const deadline = Date.now() + NEST_WAKE_TIMEOUT_MS
+    while (!this.nest.isRunning(login, id)) {
+      if (Date.now() >= deadline) return false
+      await new Promise((resolve) => setTimeout(resolve, NEST_WAKE_POLL_MS))
+    }
+    return true
+  }
+
+  /**
+   * One request straight to a managed box or a Nest box, with a short token for `login`. The box fetches the user's
    * credentials itself (`ControlPaths.boxCredentials`), so the Hub sends none.
    */
-  private async managedBoxCall(
+  private async directBoxCall(
     box: ManagedBoxRow,
     login: string,
     method: "GET" | "POST",
@@ -1298,6 +1454,7 @@ export class Hub extends DurableObject<Env> {
 
   override async alarm(): Promise<void> {
     const now = Date.now()
+    await this.nest.expire(now)
     const due = this.ctx.storage.sql
       .exec<AutomationRow>(`SELECT ${AUTOMATION_COLUMNS} FROM automations WHERE enabled = 1 AND next_run_at <= ?`, now)
       .toArray()
@@ -1333,16 +1490,16 @@ export class Hub extends DurableObject<Env> {
     )
   }
 
-  /** Points the alarm at the earliest pending schedule, or clears it when none is pending. */
+  /** Points the alarm at the earliest pending schedule, activity, or Nest deadline; clears it when none is pending. */
   private async rearm(): Promise<void> {
     const row = this.ctx.storage.sql
       .exec<{ at: number | null }>("SELECT MIN(next_run_at) AS at FROM automations WHERE enabled = 1")
       .toArray()[0]
     const activityAt = this.ctx.storage.sql.exec<{ at: number | null }>("SELECT MIN(due_at) AS at FROM pr_activity_queue").toArray()[0]?.at ?? null
     const scheduleAt = row?.at ?? null
-    const at = scheduleAt === null ? activityAt : activityAt === null ? scheduleAt : Math.min(scheduleAt, activityAt)
-    if (at === null) await this.ctx.storage.deleteAlarm()
-    else await this.ctx.storage.setAlarm(at)
+    const deadlines = [scheduleAt, activityAt, this.nest.nextDeadline()].filter((at): at is number => at !== null)
+    if (deadlines.length === 0) await this.ctx.storage.deleteAlarm()
+    else await this.ctx.storage.setAlarm(Math.min(...deadlines))
   }
 
   private async fire(row: AutomationRow, reason: string, pr: PullRequestInfo | null): Promise<AutomationRun> {
@@ -1412,6 +1569,7 @@ export class Hub extends DurableObject<Env> {
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
     if (url.pathname === RELAY_CONNECT_PATH) return this.acceptBox(request)
+    if (url.pathname === ControlPaths.nestHostConnect) return this.acceptNestHost(request)
     if (url.pathname.startsWith("/_preview/") || this.previewReferer(request) !== null) {
       return this.previewRelay(request, url)
     }
@@ -1511,6 +1669,131 @@ export class Hub extends DurableObject<Env> {
     const outputHeaders = new Headers(response.headers)
     outputHeaders.set("referrer-policy", "strict-origin-when-cross-origin")
     return new Response(response.body, { status: response.status, headers: outputHeaders })
+  }
+
+  /**
+   * A Nest host's control socket. The host names itself in `NEST_HOST_ID_HEADER` and proves itself with its host
+   * secret, the same secret its meter batches use. Its first frame must be `hello`; no command reaches it before.
+   */
+  private async acceptNestHost(request: Request): Promise<Response> {
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return errorResponse(426, "UpgradeRequired", "expected a WebSocket upgrade")
+    }
+    const auth = request.headers.get("authorization") ?? ""
+    const secret = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : ""
+    const hostId = request.headers.get(NEST_HOST_ID_HEADER) ?? ""
+    const stored = meterHostSecret(this.ctx.storage.sql, hostId)
+    if (secret === "" || stored === undefined || !(await safeEqual(secret, stored))) {
+      return errorResponse(401, "Unauthorized", "invalid Nest host credentials")
+    }
+    // Latest connection wins: the previous socket for this host is dropped.
+    for (const old of this.ctx.getWebSockets(NEST_HOST_TAG)) {
+      const attachment = nestAttachment(old)
+      if (attachment === null || attachment.hostId !== hostId) continue
+      // A retired socket takes no more frames: its host now talks over the new connection.
+      old.serializeAttachment({ ...attachment, retired: true })
+      closeQuietly(old, 4000, "replaced")
+    }
+    const pair = new WebSocketPair()
+    const client = pair[0]
+    const server = pair[1]
+    const attachment: NestAttachment = { hostId, hello: false }
+    this.ctx.acceptWebSocket(server, [NEST_HOST_TAG])
+    server.serializeAttachment(attachment)
+    return new Response(null, { status: 101, webSocket: client })
+  }
+
+  private isNestSocket(ws: WebSocket): boolean {
+    return this.ctx.getTags(ws).includes(NEST_HOST_TAG)
+  }
+
+  /** The host's socket once its `hello` was accepted; null while the host is away. */
+  private nestSocket(hostId: string): WebSocket | null {
+    for (const ws of this.ctx.getWebSockets(NEST_HOST_TAG)) {
+      const attachment = nestAttachment(ws)
+      if (attachment?.hostId === hostId && attachment.hello && !attachment.retired) return ws
+    }
+    return null
+  }
+
+  private sendNestFrame(hostId: string, frame: NestControlFrame): boolean {
+    const ws = this.nestSocket(hostId)
+    if (ws === null) return false
+    try {
+      ws.send(JSON.stringify(frame))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private nestSocketGone(ws: WebSocket): void {
+    const attachment = nestAttachment(ws)
+    if (attachment !== null) this.nest.hostDisconnected(attachment.hostId)
+  }
+
+  private refuseNestHost(ws: WebSocket, reason: string): void {
+    const refusal: NestControlFrame = { _tag: "refused", reason }
+    ws.send(JSON.stringify(refusal))
+    closeQuietly(ws, 1008, reason)
+  }
+
+  /** One frame from a Nest host. A malformed, oversized or out-of-order frame closes the socket. */
+  private async onNestFrame(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const attachment = nestAttachment(ws)
+    if (attachment === null) {
+      closeQuietly(ws, 1011, "no host")
+      return
+    }
+    if (attachment.retired) {
+      closeQuietly(ws, 4000, "replaced")
+      return
+    }
+    if (typeof message !== "string") {
+      closeQuietly(ws, 1003, "binary frames are not Nest frames")
+      return
+    }
+    if (new TextEncoder().encode(message).byteLength > MAX_NEST_FRAME_BYTES) {
+      closeQuietly(ws, 1009, "frame too large")
+      return
+    }
+    const decoded = decodeNestHostFrame(message)
+    if (Either.isLeft(decoded)) {
+      this.refuseNestHost(ws, "malformed frame")
+      return
+    }
+    const frame = decoded.right
+    if (!attachment.hello) {
+      if (frame._tag !== "hello") return this.refuseNestHost(ws, "the first frame must be hello")
+      if (frame.protocol !== NEST_HOST_PROTOCOL) return this.refuseNestHost(ws, `unsupported Nest protocol ${frame.protocol}`)
+      if (frame.hostId !== attachment.hostId) return this.refuseNestHost(ws, "host id does not match its credentials")
+      const attached: NestAttachment = { hostId: attachment.hostId, hello: true }
+      ws.serializeAttachment(attached)
+      await this.nest.hello(frame)
+      await this.rearm()
+      return
+    }
+    switch (frame._tag) {
+      case "hello":
+        this.refuseNestHost(ws, "hello sent twice")
+        return
+      case "capacity":
+        await this.nest.capacity(attachment.hostId, frame.capacity)
+        break
+      case "vm":
+        this.nest.vm(attachment.hostId, frame.vm)
+        break
+      case "result":
+        this.nest.result(attachment.hostId, frame.commandId, frame.ok, frame.error ?? null, frame.vm)
+        break
+      case "inventory":
+        this.nest.inventory(attachment.hostId, frame.vms, frame.last)
+        break
+      case "wakeRequest":
+        await this.nest.wakeRequest(attachment.hostId, frame.boxId)
+        break
+    }
+    await this.rearm()
   }
 
   private acceptBox(request: Request): Response {
@@ -1623,6 +1906,13 @@ export class Hub extends DurableObject<Env> {
   // -------------------------------------------------------------------------
 
   override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    if (this.isNestSocket(ws)) {
+      this.onNestFrame(ws, message).catch((error: unknown) => {
+        console.error(`nest: host frame failed: ${error instanceof Error ? error.message : String(error)}`)
+        closeQuietly(ws, 1011, "internal error")
+      })
+      return
+    }
     if (typeof message === "string") {
       const frame = decodeFrame(message)
       if (frame) this.onFrame(ws, frame)
@@ -1635,12 +1925,14 @@ export class Hub extends DurableObject<Env> {
   }
 
   override webSocketClose(ws: WebSocket, code: number): void {
-    this.boxLost(ws)
+    if (this.isNestSocket(ws)) this.nestSocketGone(ws)
+    else this.boxLost(ws)
     closeQuietly(ws, closeCode(code), "")
   }
 
   override webSocketError(ws: WebSocket): void {
-    this.boxLost(ws)
+    if (this.isNestSocket(ws)) this.nestSocketGone(ws)
+    else this.boxLost(ws)
     closeQuietly(ws, 1000, "")
   }
 
