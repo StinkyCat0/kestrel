@@ -103,6 +103,11 @@ Built by `packages/host/nix/guest.nix` from the flake (output `packages.<system>
   `ptp_kvm` reference clock, `systemd-oomd`, zswap with a swapfile on the volume. The NVIDIA open kernel modules ship in
   the image and load only when a GPU is hot-plugged; Mesa provides software rendering otherwise.
 - Package managers point at the host's dependency cache and Nix binary cache when `configure` names them.
+- Box environment: `configure` writes `/var/lib/kestrel/box.env` (root, 0600, read by `kestrel-box.service`) with
+  `CLOUDAGENTS_BOX_ID`, `CLOUDAGENTS_CONTROL_URL`, `CLOUDAGENTS_GUEST_AGENT_SOCKET` (its presence marks a Nest VM),
+  `CLOUDAGENTS_DATA_DIR` (`/var/lib/kestrel/box`), `CLOUDAGENTS_BOX_PUBLIC_URL`, and `CLOUDAGENTS_NEST_ENROLL_TOKEN`
+  while the box is not enrolled. Enrollment needs `CLOUDAGENTS_BOX_ID` and `CLOUDAGENTS_CONTROL_URL`; the box stores
+  its secret in its data dir, ignores the token afterward, and sends `enrolled` on every connection once the secret is stored, so the guest drops the token from the file. The box never reads `CLOUDAGENTS_BOX_PUBLIC_URL` yet.
 
 ## Host layout
 
@@ -307,7 +312,9 @@ Caddy terminates TLS for `*.<slug>.<nest domain>` (DNS challenge) and proxies ev
   counting; suspended, parked or otherwise not running → 503 `{ "ok": false, "state": "<state>" }` with `Retry-After`;
   unknown → 404. A box that is running but refuses the connection answers 503 with `"state": "unreachable"`.
 
-It reports per-box open connections and the last request time to the host agent every 5 s.
+It reports per-box open connections and the last request time to the host agent every 5 s. `GET /api/health` is a
+background poll, not use: ingress leaves it out of the last request time, and it never wakes a suspended box for it
+(a suspended box answers 503 to it). The box does the same in its own activity (`lastActivityAt`).
 
 ### Host agent local API
 
