@@ -67,6 +67,38 @@ export const composerEditorStyles = `
     stroke-linejoin: round;
   }
 
+  /* Model mentions use the same compact logo and subtle backing as the shared transcript. */
+  [data-composer-editor] [data-model-mention] {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0 1px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.07);
+    vertical-align: middle;
+    white-space: nowrap;
+    color: inherit;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  [data-composer-editor] [data-harness-logo] {
+    flex-shrink: 0;
+    align-self: center;
+    width: 12px;
+    height: 12px;
+  }
+
+  /* A monochrome logo keeps its inline mask style and takes the text color, as on desktop. */
+  [data-composer-editor] span[data-harness-logo] {
+    background-color: currentColor;
+  }
+
+  [data-composer-editor] img[data-harness-logo] {
+    object-fit: contain;
+  }
+
   [data-composer-placeholder-layer] {
     position: absolute;
     inset: 0;
