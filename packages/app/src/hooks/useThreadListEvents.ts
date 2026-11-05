@@ -1,8 +1,9 @@
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import type { Target } from "@/api/client"
 import { openUserEvents } from "@/api/events"
 import { dropTask, keys, queries, storeTask } from "@/api/queries"
+import { observeTask, playTurnSound, type SeenTasks } from "@/lib/turnSound"
 
 const RECONNECT_MS = 2000
 
@@ -14,6 +15,13 @@ const RECONNECT_MS = 2000
  */
 export function useThreadListEvents(): void {
   const queryClient = useQueryClient()
+  const tasks = useQuery(queries.tasks()).data
+  const seen = useRef<SeenTasks>(new Map())
+  useEffect(() => {
+    // One clip however many threads a reconnect's refetch finds finished.
+    const turns = (tasks ?? []).filter((task) => observeTask(seen.current, task))
+    if (turns.length > 0) playTurnSound()
+  }, [tasks])
   const list = useQuery(queries.boxes()).data
   const managed = list?.managedBox ?? null
   const boxes = list?.boxes
@@ -22,7 +30,7 @@ export function useThreadListEvents(): void {
   useEffect(() => {
     const kestrel: Target = managed === null ? null : { boxId: managed.id, url: managed.url }
     const targets: Target[] = [kestrel, ...(boxes ?? []).map((box) => ({ boxId: box.id, url: box.url }))]
-    const stops = targets.map((target) => followBox(queryClient, target))
+    const stops = targets.map((target) => followBox(queryClient, target, seen.current))
     return () => stops.forEach((stop) => stop())
   }, [boxSet, queryClient])
 }
@@ -31,7 +39,7 @@ export function useThreadListEvents(): void {
  * Keeps one box's thread list stream open: reconnects 2 s after a close, and each (re)connect refetches the list.
  * Returns a function that stops it.
  */
-function followBox(queryClient: QueryClient, target: Target): () => void {
+function followBox(queryClient: QueryClient, target: Target, seen: SeenTasks): () => void {
   let active = true
   let retry: number | undefined
   let close = () => {}
@@ -41,9 +49,11 @@ function followBox(queryClient: QueryClient, target: Target): () => void {
       onEvent: (event) => {
         switch (event._tag) {
           case "task.updated":
+            if (observeTask(seen, event.task)) playTurnSound()
             storeTask(queryClient, event.task)
             break
           case "task.deleted":
+            seen.delete(event.taskId)
             dropTask(queryClient, event.taskId)
             break
         }

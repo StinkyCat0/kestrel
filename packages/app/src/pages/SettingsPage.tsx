@@ -14,7 +14,7 @@ import {
   type ThreadSettings as ThreadConfig,
   type Usage,
 } from "@cloudagents/protocol"
-import { Check, CreditCard, ExternalLink, Layers, LogOut, MessagesSquare, Plug, RotateCcw, Server, User } from "lucide-react"
+import { Check, ChevronDown, CreditCard, ExternalLink, Layers, LogOut, MessagesSquare, Plug, RotateCcw, Server, User } from "lucide-react"
 import { Navigate, NavLink, Outlet } from "react-router-dom"
 import { api } from "@/api/client"
 import { keys, queries } from "@/api/queries"
@@ -26,12 +26,21 @@ import { Alert } from "@cloudagents/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@cloudagents/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Slider } from "@/components/ui/slider"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { SERVER_URL } from "@/config"
 import { useShownModels } from "@/hooks/useShownModels"
 import { useSignOut } from "@/hooks/useSignOut"
 import { cn } from "@/lib/utils"
+import { getTurnSound, getTurnVolume, playTurnSound, TURN_SOUND_KEY, TURN_VOLUME_KEY, turnSounds } from "@/lib/turnSound"
 import { errorText } from "@/util"
 
 const sections = [
@@ -98,6 +107,73 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
+function TurnSoundCard() {
+  const [sound, setSound] = useState(getTurnSound)
+  const [volume, setVolume] = useState(getTurnVolume)
+  const silent = sound === "off"
+
+  return (
+    <Card className="py-0">
+      <CardContent className="divide-y divide-white/[0.04] px-0">
+        <div className="px-5 py-4">
+          <div className="font-medium">Turn sound</div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Play a sound when a thread finishes or needs your input. Saved in this browser; your browser may require a
+            click on the page before it plays audio.
+          </p>
+        </div>
+        <Row label="Sound">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="soft" size="sm" aria-label="Turn sound" className="capitalize data-[state=open]:bg-white/[0.06]">
+                {sound}
+                <ChevronDown className="opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuRadioGroup
+                value={sound}
+                onValueChange={(value) => {
+                  const next = turnSounds.find((option) => option === value) ?? "off"
+                  setSound(next)
+                  localStorage.setItem(TURN_SOUND_KEY, next)
+                  playTurnSound(next, volume)
+                }}
+              >
+                {turnSounds.map((option) => (
+                  <DropdownMenuRadioItem key={option} value={option} className="capitalize">
+                    {option}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button variant="soft" size="sm" disabled={silent || volume === 0} onClick={() => playTurnSound(sound, volume)}>
+            Preview
+          </Button>
+        </Row>
+        <Row label="Volume">
+          <Slider
+            thumbLabel="Turn sound volume"
+            className="max-w-64 flex-1"
+            disabled={silent}
+            min={0}
+            max={100}
+            step={5}
+            value={[volume]}
+            onValueChange={([next = volume]) => {
+              setVolume(next)
+              localStorage.setItem(TURN_VOLUME_KEY, String(next))
+            }}
+            onValueCommit={([next = volume]) => playTurnSound(sound, next)}
+          />
+          <span className="w-10 text-right text-sm text-muted-foreground tabular-nums">{volume}%</span>
+        </Row>
+      </CardContent>
+    </Card>
+  )
+}
+
 export function ProfileSettings() {
   const me = useQuery(queries.me())
   const connections = useQuery(queries.connections())
@@ -136,6 +212,10 @@ export function ProfileSettings() {
           </Row>
         </CardContent>
       </Card>
+      <TurnSoundCard />
+      <p className="text-xs text-muted-foreground">
+        Name and avatar update from GitHub each time you sign in.
+      </p>
       <Card className="py-0">
         <CardContent className="flex flex-wrap items-center justify-between gap-4 px-5 py-4">
           <div className="flex min-w-0 flex-col gap-1">
