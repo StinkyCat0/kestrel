@@ -129,7 +129,7 @@ function ApiKeysCard({ connections }: { connections: readonly Connection[] }) {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {visible.length > 0 && (
+      {visible.length > 0 ? (
         <Card className="py-0">
           <CardContent className="divide-y divide-white/[0.04] px-0">
             {visible.map((connection) => (
@@ -141,6 +141,8 @@ function ApiKeysCard({ connections }: { connections: readonly Connection[] }) {
             ))}
           </CardContent>
         </Card>
+      ) : (
+        <p className="py-4 text-center text-muted-foreground">No api keys added</p>
       )}
     </div>
   )
@@ -262,11 +264,11 @@ function ModelPicker({ provider }: { provider: ModelProviderInfo }) {
 function FreeOpenCodeRow({ connection }: { connection: Connection }) {
   return (
     <HarnessRow connection={connection}>
-      <span className="text-xs text-muted-foreground">
+      <p className="text-muted-foreground">
         {connection.available
-          ? "Installed on the box. Free models need no sign-in or Go key. MCP tools are available."
-          : `${connection.error ?? "OpenCode is not installed on this box"}. Install OpenCode 2 to offer its free models.`}
-      </span>
+          ? "Use free models without signing in."
+          : `${connection.error ?? "OpenCode is not installed on this box"}. Install OpenCode 2 to use free models.`}
+      </p>
     </HarnessRow>
   )
 }
