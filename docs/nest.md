@@ -91,18 +91,28 @@ a Nix GC root while any template or suspended VM references it.
 
 Built by `packages/host/nix/guest.nix` from the flake (output `packages.<system>.nest-guest`):
 
-- `kernel` (bzImage), `initrd`, `store.erofs` (the system closure, read-only), `cmdline` (a file), `manifest.json`
-  (`{ imageId, kernel, initrd, store, cmdline }`, `imageId` = the store hash, which names templates).
-- Boot: direct kernel boot. The initrd mounts `/dev/pmem0` (`store.erofs`, DAX) at `/nix/.ro-store`, a tmpfs root,
-  and an overlay `/nix/store` whose upper layer moves to the volume once it is mounted (`NEST_VOLUME_MOUNT/.nix-rw`),
-  so packages a user installs persist.
+- `kernel` (bzImage), `initrd`, `store.erofs`, `cmdline` (a file), `manifest.json` (`{ imageId, kernel, initrd, store,
+  cmdline }`, `imageId` = the store hash of the system closure, which names templates). `store.erofs` holds `store/`
+  (the closure's store entries, the overlay's lower layer) and `registration` (the closure's Nix database rows, loaded
+  at boot).
+- Boot: direct kernel boot. The initrd mounts `/dev/pmem0` (`store.erofs`, DAX, read-only) at `/nix/.ro-store`, a tmpfs
+  root, and an overlay `/nix/store` (lower `/nix/.ro-store/store`, upper on tmpfs). `kestrel-nix-db` loads `registration`
+  into the Nix database on every boot. On `configure` the guest agent mounts the volume at `NEST_VOLUME_MOUNT`, moves the
+  overlay's upper layer to `NEST_VOLUME_MOUNT/.nix-rw/upper` (copied from the tmpfs layer on first use; the agent's
+  default lower and upper paths are this image's layout, so the agent passes no layout flags), then starts `kestrel-box`,
+  whose `requires` starts `kestrel-volume`, which binds the Nix database to `NEST_VOLUME_MOUNT/.nix-var` (copied on first
+  use), registers the image's paths in it, and so packages a user installs persist.
 - Kernel: `VIRTIO_{PCI,BLK,NET,MEM,BALLOON,PMEM,VSOCKETS}`, `LIBNVDIMM`, `FS_DAX`, `EROFS_FS`, `OVERLAY_FS`, `VMGENID`,
-  `HW_RANDOM_VIRTIO`, `PTP_1588_CLOCK_KVM`, `MEMORY_HOTPLUG`, `MEMORY_HOTREMOVE`, `HOTPLUG_PCI_ACPI`, `ZSWAP`, `NO_HZ_IDLE`.
+  `HW_RANDOM_VIRTIO`, `PTP_1588_CLOCK_KVM`, `MEMORY_HOTPLUG`, `MEMORY_HOTREMOVE`, `HOTPLUG_PCI_ACPI`, `ZSWAP`, and
+  `NO_HZ_IDLE` (stock nixpkgs sets `NO_HZ_FULL`; the image overrides it so an idle vCPU stops its tick).
 - Command line: `console=hvc0 memhp_default_state=online_movable zswap.enabled=1 zswap.compressor=zstd`.
-- Services: `kestrel-guest-agent` (root), `kestrel-box` (user `kestrel`, not started until `configure`), chrony with the
-  `ptp_kvm` reference clock, `systemd-oomd`, zswap with a swapfile on the volume. The NVIDIA open kernel modules ship in
+- Services: `kestrel-guest-agent` (root, started at boot), `kestrel-box` (user `kestrel-box`, started by the agent after
+  `configure` once `box.env` exists), `kestrel-volume` (started through `kestrel-box`'s `requires`), chrony with the
+  `ptp_kvm` reference clock, `systemd-oomd`, and zswap backed by the swap disk (`kestrel-swap`, virtio-blk serial
+  `kestrel-swap`), which the agent formats and enables on every boot or clone. The NVIDIA open kernel modules ship in
   the image and load only when a GPU is hot-plugged; Mesa provides software rendering otherwise.
-- Package managers point at the host's dependency cache and Nix binary cache when `configure` names them.
+- Package managers point at the host's dependency cache and Nix binary cache when `configure` names them. The box's
+  home is `NEST_VOLUME_MOUNT/home`, where `configure` writes those configs.
 - Box environment: `configure` writes `/var/lib/kestrel/box.env` (root, 0600, read by `kestrel-box.service`) with
   `CLOUDAGENTS_BOX_ID`, `CLOUDAGENTS_CONTROL_URL`, `CLOUDAGENTS_GUEST_AGENT_SOCKET` (its presence marks a Nest VM),
   `CLOUDAGENTS_DATA_DIR` (`/var/lib/kestrel/box`), `CLOUDAGENTS_BOX_PUBLIC_URL`, and `CLOUDAGENTS_NEST_ENROLL_TOKEN`
@@ -297,13 +307,20 @@ rejected before any object is touched.
 - One tap per VM (`kn-<n>`), routed, no bridge: the host side has `169.254.0.1/32`, the guest gets a unique
   `10.77.x.y/32` with its default route on-link via `169.254.0.1`, and the host routes that /32 to the tap. Template
   clones share a MAC, which is harmless on point-to-point links.
-- nftables: traffic from a tap is dropped unless its source is that VM's own addresses (anti-spoofing). Guests reach
-  the internet through masquerade; they cannot reach each other, the host, or private ranges, except the host's
-  dependency cache, Nix cache and DNS ports on `169.254.0.1`. Ingress reaches each VM's port 8787.
+- nftables (`inet kestrel`): tap traffic is dropped unless its source is that VM's assigned address. The host agent
+  adds each tap to the `tap_addrs` set (`ifname . ipv4_addr`) when it creates the tap
+  (`nft add element inet kestrel tap_addrs { "kn-<n>" . <vm-ip> }`); the `tap_source` chain enforces the set on forward
+  and input. Guests reach public internet addresses only, through masquerade on the uplink, never private, CGNAT,
+  loopback or link-local ranges. They cannot reach each other or the host, except the host's dependency cache, Nix
+  cache and DNS on `169.254.0.1` (TCP 3141, 5000, 53; UDP 53). Everything else from a tap, including SSH and ping, is
+  dropped. Ingress reaches each VM's port 8787.
+- DNS: `unbound` on `169.254.0.1:53` answers `10.77.0.0/16` and refuses everything else. The host agent sends
+  `dns: ["169.254.0.1"]` in `configure`.
 - `tc` limits each tap's egress (default 200 Mbit/s).
 - WebRTC: each VM's public IPv6 address when the host has a routed prefix; otherwise coturn on the host, with
   short-lived credentials (TURN REST API secret held by the host agent, handed to the box per session) and
-  `denied-peer-ip` for `10.77.0.0/16`, `169.254.0.0/16`, the host's addresses and private ranges.
+  `denied-peer-ip` for every private, CGNAT, loopback and link-local range (IPv4 and IPv6). The output chain drops
+  coturn's traffic to the host's own addresses (`meta skuid <turnserver> fib daddr type local`).
 
 ## Ingress
 
@@ -360,10 +377,12 @@ Metadata (packuments, indexes) is cached for 5 minutes. Artifacts are stored by 
 fetched within that window still lists them with the same hash, so a package the registry pulled stops being served.
 Requests with credentials are refused (private packages bypass the cache by going to the origin directly).
 
-Nix: the host keeps a static binary cache directory (`nix copy --to file:///var/cache/kestrel-nix`) holding only the
-guest image closure and a pinned package set, signed with the host's cache key, served read-only on
-`169.254.0.1:5000`. The host's own store (its services and configuration) is never exposed. Guests trust that key and
-cache.nixos.org.
+Nix: the host keeps a static binary cache directory holding only the guest image closure and a pinned package set,
+served read-only on `169.254.0.1:5000`. The host's own store (its services and configuration) is never exposed.
+Populate and sign it with `nix copy --to 'file:///var/cache/kestrel-nix?secret-key=<secretKeyFile>'`. The signing key
+is `services.kestrel-nest.nixCache.secretKeyFile` (default `/etc/kestrel-host/nix-cache-secret-key`); its public half
+is `nixCache.publicKey`, which the host agent sends to guests at `configure` as `nixCachePublicKey`. Guests trust that
+key and cache.nixos.org.
 
 ## Control plane
 
@@ -410,9 +429,13 @@ blocks of the volume and the memory image, GPU device-seconds while attached.
 
 ## Operations
 
-- DNS: at host registration the operator creates `*.<slug>.<nest domain>` A/AAAA records to the host. Certificates use
-  the DNS challenge through a CNAME from `_acme-challenge.<slug>` to a challenge zone, so a host's DNS token cannot
-  change other hosts' records.
+- DNS: at host registration the operator creates `*.<slug>.<nest domain>` A/AAAA records to the host. Certificates
+  use the DNS-01 challenge: the host's `acme.dnsProvider` (`cloudflare` or `route53`) selects the Caddy plugin built
+  into the host, and the provider's credentials come from `acme.environmentFile` (default
+  `/etc/kestrel-host/caddy.env`). Certificates use a CNAME from `_acme-challenge.<slug>` to a challenge zone, so a
+  host's DNS token cannot change other hosts' records.
+- userfaultfd: `kestrel-host` runs as root, so Cloud Hypervisor's `memory_restore_mode=ondemand` opens
+  `/dev/userfaultfd` with no ACL or sysctl change. Revisit this if the agent ever drops root.
 - Image rollout: hosts build a template for a new `imageId` and clone new VMs from it; boxes move to the new image when
   they next park and resume. Reports carry `imageId`, so the control plane can drain old images.
 
