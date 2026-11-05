@@ -1,6 +1,7 @@
 import { QueryClient, queryOptions, type QueryKey } from "@tanstack/react-query";
 import type { AgentItem, AgentModel, Message, ModelProvider, Run, Task } from "@cloudagents/protocol";
 import type { ApiClient } from "@/api/client";
+import { pendingSaves } from "@/lib/pendingSaves";
 
 /**
  * A request about one thread. It names the box client that sent it, so the response is cached under that box even if
@@ -43,6 +44,10 @@ export const boxKeys = (scope: string) => ({
   providerUsage: ["box-data", scope, "provider-usage"] as const,
   /** What the box can run (`BoxCapabilities`): which harnesses it has. */
   capabilities: ["box-data", scope, "capabilities"] as const,
+  /** Generated-text preferences of this box's user (title, model, streaming). */
+  textGenerationSettings: ["box-data", scope, "text-generation-settings"] as const,
+  /** Thread-run preferences of this box's user (usage-limit auto-resume). */
+  threadSettings: ["box-data", scope, "thread-settings"] as const,
   usageActivity: ["box-data", scope, "usage-activity"] as const,
   /** All of the user's threads. Named apart from `task(id)` so invalidating one never touches the other. */
   tasks: ["box-data", scope, "task-list"] as const,
@@ -103,6 +108,15 @@ export function storeTask(client: QueryClient, task: Task, scope: string): void 
 
 export function createQueries(api: ApiClient) {
   const scoped = boxKeys(api.boxScope);
+
+  /**
+   * Settings reads wait for a form that just closed on this box: its PUT must land first, or the GET can return the
+   * pre-save value after the save already updated the cache, and a reopened form would then hydrate stale settings.
+   */
+  const afterPendingSettings = async () => {
+    const pending = pendingSaves(api.boxScope);
+    if (pending !== undefined) await pending;
+  };
   return {
     me: () => queryOptions({ queryKey: keys.me, queryFn: () => api.me() }),
     box: () => queryOptions({ queryKey: scoped.box, queryFn: () => api.box(), refetchInterval: BOX_POLL_MS }),
@@ -151,6 +165,22 @@ export function createQueries(api: ApiClient) {
     usage: () => queryOptions({ queryKey: scoped.usage, queryFn: () => api.usage() }),
     providerUsage: () => queryOptions({ queryKey: scoped.providerUsage, queryFn: () => api.providerUsage() }),
     capabilities: () => queryOptions({ queryKey: scoped.capabilities, queryFn: () => api.capabilities() }),
+    textGenerationSettings: () =>
+      queryOptions({
+        queryKey: scoped.textGenerationSettings,
+        queryFn: async () => {
+          await afterPendingSettings();
+          return api.textGenerationSettings();
+        },
+      }),
+    threadSettings: () =>
+      queryOptions({
+        queryKey: scoped.threadSettings,
+        queryFn: async () => {
+          await afterPendingSettings();
+          return api.threadSettings();
+        },
+      }),
     usageActivity: () => queryOptions({ queryKey: scoped.usageActivity, queryFn: () => api.usageActivity() }),
     commands: (
       taskId: string | undefined,

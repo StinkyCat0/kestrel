@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { QueryClient } from "@tanstack/react-query";
-import { connectedModelProviders, type Connection, type Task } from "@cloudagents/protocol";
+import { connectedModelProviders, type Connection, type Task, type TextGenerationSettings } from "@cloudagents/protocol";
 import { createApiClient } from "./client";
 import { boxKeys, createQueries, fetchTaskSnapshot, queryClient, storeTask } from "./queries";
+import { trackSave, trackSaveQueue } from "@/lib/pendingSaves";
+import { createSaveQueue } from "@/lib/saveQueue";
 
 const task = (title: string): Task => ({
   id: "same-id", owner: "owner", title, status: "idle", createdAt: "2026-01-01T00:00:00Z",
@@ -29,6 +31,8 @@ test("box clients isolate caches even for identical task and run IDs", () => {
     [a.runItems("run"), b.runItems("run")], [a.diff("same-id"), b.diff("same-id")],
     [a.desktop("same-id"), b.desktop("same-id")],
     [a.commands("same-id", undefined, undefined, undefined), b.commands("same-id", undefined, undefined, undefined)],
+    [a.textGenerationSettings, b.textGenerationSettings],
+    [a.threadSettings, b.threadSettings],
   ]) expect(left).not.toEqual(right);
 });
 
@@ -162,4 +166,59 @@ test("the snapshot replaces a task cached before the fetch started", async () =>
   const key = ["test-task"];
   queryClient.setQueryData(key, taskUsing(300));
   expect((await fetchTaskSnapshot(key, async () => taskUsing(350))).context?.usedTokens).toBe(350);
+});
+
+test("settings reads wait for a closed form's save so a reopened form cannot hydrate pre-save values", async () => {
+  const calls: string[] = [];
+  const saved: TextGenerationSettings = {
+    enabled: true,
+    model: "claude-opus-5-5",
+    effort: "high",
+    threadTitleInstructions: "saved",
+    responseStreamingMode: "turn",
+  };
+  const { promise, resolve } = Promise.withResolvers<TextGenerationSettings>();
+  const queue = createSaveQueue<TextGenerationSettings>(() => promise);
+  queue.push(saved);
+  trackSaveQueue("waiting-box", queue);
+  const api = {
+    boxScope: "waiting-box",
+    textGenerationSettings: async () => {
+      calls.push("text");
+      return saved;
+    },
+    threadSettings: async () => {
+      calls.push("threads");
+      return { autoResumeAfterUsageLimits: true };
+    },
+  } as unknown as Parameters<typeof createQueries>[0];
+  const queries = createQueries(api);
+  const text = queryClient.fetchQuery(queries.textGenerationSettings());
+  const threads = queryClient.fetchQuery(queries.threadSettings());
+  await new Promise((resolveTick) => setTimeout(resolveTick, 0));
+  expect(calls).toEqual([]);
+
+  resolve(saved);
+  await Promise.all([text, threads]);
+  expect(calls).toEqual(["text", "threads"]);
+  await queue.idle();
+});
+
+test("thread settings reads wait for a usage-limit mutation write", async () => {
+  const calls: string[] = [];
+  const { promise, resolve } = Promise.withResolvers<void>();
+  trackSave("usage-box", promise);
+  const api = {
+    boxScope: "usage-box",
+    threadSettings: async () => {
+      calls.push("threads");
+      return { autoResumeAfterUsageLimits: true };
+    },
+  } as unknown as Parameters<typeof createQueries>[0];
+  const threads = queryClient.fetchQuery(createQueries(api).threadSettings());
+  await new Promise((resolveTick) => setTimeout(resolveTick, 0));
+  expect(calls).toEqual([]);
+  resolve();
+  await threads;
+  expect(calls).toEqual(["threads"]);
 });
