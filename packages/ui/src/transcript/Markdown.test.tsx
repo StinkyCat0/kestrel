@@ -110,4 +110,76 @@ describe("agent HTML and SVG", () => {
     // Inside a drawing, inline style stays: it cannot position anything there.
     expect(html).toContain('style="opacity:.5"')
   })
+
+  test("a drawing split by blank lines stays one drawing instead of becoming a code sample", () => {
+    const html = render(
+      `<svg viewBox="0 0 900 120" width="900" height="120" xmlns="http://www.w3.org/2000/svg">\n` +
+        `    <rect x="4" y="4" width="150" height="56" rx="8" fill="#1f2937"/>\n` +
+        `    <text x="79" y="24" text-anchor="middle" fill="#e5e7eb">turn item stored</text>\n` +
+        `\n` +
+        `    <rect x="176" y="4" width="150" height="56" rx="8" fill="#14322a"/>\n` +
+        `    <text x="251" y="24" text-anchor="middle" fill="#e5e7eb">reset travels with the failure</text>\n` +
+        `</svg>`,
+    )
+    expect(html).toContain('<rect x="4" y="4" width="150" height="56" rx="8" fill="#1f2937">')
+    expect(html).toContain('<rect x="176" y="4" width="150" height="56" rx="8" fill="#14322a">')
+    expect(html).not.toContain("<pre")
+    expect(html).not.toContain("&lt;rect")
+  })
+
+  test("a fenced sample of SVG markup keeps its blank lines", () => {
+    const html = render("```svg\n<svg>\n  <rect/>\n\n  <rect/>\n</svg>\n```")
+    expect(html).toContain("  &lt;rect/&gt;\n\n  &lt;rect/&gt;")
+  })
+
+  test("a nested fenced sample keeps its blank lines", () => {
+    const html = render("- item\n    ```html\n    <svg>\n\n    <rect/>\n    ```\n")
+    expect(html).toContain("&lt;svg&gt;\n\n&lt;rect/&gt;")
+  })
+
+  test("an indented code sample of SVG markup keeps its blank lines", () => {
+    const html = render('Example:\n\n    <svg viewBox="0 0 10 10">\n\n        <!-- note -->\n        <rect/>\n    </svg>\n')
+    expect(html).toContain("&lt;svg viewBox=&quot;0 0 10 10&quot;&gt;\n\n    &lt;!-- note --&gt;")
+  })
+
+  test("a stray `<svg>` in prose does not reach into the paragraphs and code after it", () => {
+    const html = render("<svg> starts a drawing in prose.\n\n```js\nconst a = 1\n\nconst b = 2\n```\n\nClose with </svg> later.")
+    expect(html).toContain("const a = 1\n\nconst b = 2")
+    expect(html.match(/<p>/g)).toHaveLength(2)
+  })
+
+  test("a bare `<svg>` line leaves the list and paragraphs after it alone", () => {
+    const html = render("Use <svg> to start.\n<svg>\n\n- one\n\n    - nested\n\n- two\n\nLater says </svg> done.")
+    expect(html).toContain("<p>one</p>")
+    expect(html).toContain("<li>nested</li>")
+    expect(html).toContain("<p>two</p>")
+  })
+
+  test("a drawing whose elements are indented one to three spaces is still kept whole", () => {
+    const html = render('<svg viewBox="0 0 10 10">\n  <rect width="4"/>\n\n  <text x="1" y="1">hi</text>\n</svg>')
+    expect(html).toContain('<rect width="4">')
+    expect(html).toContain('<text x="1" y="1">hi</text>')
+    expect(html).not.toContain("&lt;rect")
+  })
+
+  test("a drawing indented under a list item is still kept whole", () => {
+    const html = render(
+      '- item\n\n    <svg viewBox="0 0 10 10">\n        <rect width="4" height="4"/>\n\n        <text x="1" y="1">hi</text>\n    </svg>\n',
+    )
+    expect(html).toContain('<rect width="4" height="4">')
+    expect(html).toContain('<text x="1" y="1">hi</text>')
+    expect(html).not.toContain("&lt;rect")
+  })
+
+  test("text inside a drawing keeps its character references as text", () => {
+    const html = render('<svg viewBox="0 0 10 10">\n\n <text x="1" y="1">a &lt;rect/&gt; b</text>\n</svg>')
+    expect(html).toContain('<text x="1" y="1">a &lt;rect/&gt; b</text>')
+    expect(html).not.toContain("<rect")
+  })
+
+  test("a fenced sample without a language stays a code sample", () => {
+    const html = render('<svg viewBox="0 0 10 10">\n\n```\n<rect/>\n</svg>\n```\n')
+    expect(html).toContain("<pre><code>")
+    expect(html).toContain("&lt;rect/&gt;")
+  })
 })

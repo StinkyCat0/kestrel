@@ -1,4 +1,5 @@
 import { useId, useMemo, type ComponentProps } from "react"
+import type { Blockquote, List, ListItem, Root, RootContent } from "mdast"
 import ReactMarkdown, { type Components, type ExtraProps, type Options } from "react-markdown"
 import rehypeRaw from "rehype-raw"
 import rehypeSanitize from "rehype-sanitize"
@@ -32,7 +33,85 @@ function Link({ node: _node, children, ...props }: ComponentProps<"a"> & ExtraPr
 const COMPONENTS: Components = { a: Link }
 
 // Single newlines stay line breaks: run output that falls back to raw stdout/stderr is line-oriented.
-const REMARK_PLUGINS = [remarkGfm, remarkBreaks]
+// The drawing repair runs last, so it sees the breaks `remarkBreaks` and the tables `remarkGfm` added.
+const REMARK_PLUGINS = [remarkGfm, remarkBreaks, remarkDrawingsWhole]
+
+/** A raw HTML block that opens a drawing. */
+const DRAWING_OPEN = /^\s*<svg\b[^>]*>/i
+const DRAWING_CLOSE = /<\/svg\s*>/i
+/** A code fence: a run of backticks or tildes at any indent, the first thing on its line. */
+const FENCE = /^\s*(`{3,}|~{3,})/
+
+/** mdast decodes character references in text; put back what raw HTML needs so the drawing keeps its literal text. */
+const escapeText = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+
+/**
+ * The text of a node that continues a drawing interrupted by a blank line: SVG markup as raw HTML, an indented code
+ * sample (elements indented four spaces or more), or a paragraph of inline HTML (elements indented one to three).
+ * `undefined` for anything else, which ends the search. Fenced code is a sample, not a continuation, so it stays code.
+ */
+function drawingText(node: RootContent, lines: string[]): string | undefined {
+  if (node.type === "html") return node.value
+  if (node.type === "code") {
+    const line = lines[(node.position?.start.line ?? 0) - 1]
+    if (node.lang !== null || line === undefined || FENCE.test(line)) return undefined
+    return node.value
+  }
+  if (node.type !== "paragraph") return undefined
+  let text = ""
+  for (const child of node.children) {
+    if (child.type === "html") text += child.value
+    else if (child.type === "text") text += escapeText(child.value)
+    else if (child.type === "break") text += "\n"
+    else return undefined
+  }
+  return text
+}
+
+/** Containers whose children are blocks: a drawing is only ever one of those, never inline inside a paragraph. */
+function isBlockContainer(node: RootContent): node is Blockquote | List | ListItem {
+  return node.type === "blockquote" || node.type === "list" || node.type === "listItem"
+}
+
+/**
+ * Markdown ends a raw HTML block at a blank line, so an inline SVG laid out in blank-line-separated groups falls
+ * apart: the block stops at the first blank line and the rest parses as an indented code sample or a paragraph of
+ * inline HTML. Merge that continuation back into the raw HTML it belongs to, before the sanitizer sees either, so the
+ * whole drawing renders. Prose that merely mentions `<svg>`, and code that quotes SVG markup, are separate nodes and
+ * stay as they are.
+ */
+function remarkDrawingsWhole() {
+  return (tree: Root, file?: { value?: unknown }) => {
+    const lines = typeof file?.value === "string" ? file.value.split("\n") : []
+    const walk = (parent: { children: RootContent[] }) => {
+      for (let index = 0; index < parent.children.length; index++) {
+        const node = parent.children[index]!
+        if (node.type === "html" && DRAWING_OPEN.test(node.value) && !DRAWING_CLOSE.test(node.value)) {
+          const parts = [node.value]
+          let end = index
+          let closed = false
+          while (end + 1 < parent.children.length) {
+            const continuation = drawingText(parent.children[end + 1]!, lines)
+            if (continuation === undefined || !continuation.trimStart().startsWith("<")) break
+            end += 1
+            parts.push(continuation)
+            if (DRAWING_CLOSE.test(continuation)) {
+              closed = true
+              break
+            }
+          }
+          if (closed) {
+            node.value = parts.join("\n")
+            parent.children.splice(index + 1, end - index)
+          }
+        }
+        const child = parent.children[index]!
+        if (isBlockContainer(child)) walk(child)
+      }
+    }
+    walk(tree)
+  }
+}
 
 /**
  * Agent output as GitHub-flavoured markdown. Raw HTML and inline SVG render in place, through the allowlist in
