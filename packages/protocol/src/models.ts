@@ -35,80 +35,157 @@ export const EFFORT_LABELS: Record<AgentEffort, string> = {
 }
 
 /**
- * Model id passed to the provider's CLI (`claude --model`, the Codex app-server thread's `model`, the ACP `model`
- * config option of OpenCode, which names OpenCode's own provider first (`opencode` free, `opencode-go` Go), and of
- * Antigravity CLI).
+ * The harness a model's route runs in. A base model id uses its provider's current harness; a route id names another
+ * compatible harness explicitly (`${baseId}@${harness}`). Antigravity is not a route suffix: Google's models are only
+ * available through that CLI.
  */
-export const AgentModel = Schema.Literal(
-  "claude-fable-5-1",
-  "claude-opus-5-5",
-  "claude-sonnet-5-5",
-  "claude-haiku-5-5",
-  "claude-fable-5",
-  "claude-opus-5",
-  "claude-sonnet-5",
-  "claude-opus-4-8",
-  "claude-opus-4-7",
-  "claude-opus-4-6",
-  "claude-sonnet-4-6",
-  "claude-opus-4-5",
-  "claude-haiku-4-5",
-  "gpt-6-astra",
-  "gpt-6.1-sol",
-  "gpt-6.1-terra",
-  "gpt-6-luna",
-  "gpt-6-sol",
-  "anthropic/claude-fable-5.1",
-  "anthropic/claude-opus-5.5",
-  "anthropic/claude-sonnet-5.5",
-  "anthropic/claude-haiku-5.5",
-  "glm-5.3[1m]",
-  "glm-5.3-flash[1m]",
-  "glm-5.3-flashx[1m]",
-  "glm-5.2[1m]",
-  "deepseek-flash[1m]",
-  "deepseek-v4-pro",
-  "MiniMax-M3.1-Flash[1m]",
-  "MiniMax-M3[1m]",
-  "kimi-k3.1-pro",
-  "kimi-k3.1-pro-highspeed",
-  "kimi-k3[1m]",
-  "kimi-k2.7-code",
-  "opencode/big-pickle",
-  "opencode/glm-5.3-flash-free",
-  "opencode/deepseek-v4.1-flash-free",
-  "opencode/mimo-v2.6-flash-free",
-  "opencode/beam-free",
-  "opencode/crouton-alpha-free",
-  "opencode/flint-40b-free",
-  "opencode/nemotron-3.5-lightning-free",
-  "opencode/nemotron-3.5-super-vl-free",
-  "opencode/pulse-alpha-free",
-  "opencode-go/kimi-k3.1-pro",
-  "opencode-go/minimax-m3.1-flash",
-  "opencode-go/mimo-v2.6-pro",
-  "opencode-go/mimo-v2.6-flash",
-  "opencode-go/grok-4.7",
-  "opencode-go/step-5-preview",
-  "opencode-go/deepseek-v4.1-flash",
-  "opencode-go/hy4-preview",
-  "opencode-go/glm-5.3-flash",
-  "opencode-go/qwen3.8-flash",
-  "opencode-go/glm-5.3",
-  "opencode-go/qwen3.8-max",
-  "opencode-go/kimi-k3",
-  "opencode-go/hy3",
-  "opencode-go/longcat-2.0",
-  "opencode-go/glm-5.2",
-  "opencode-go/kimi-k2.7-code",
-  "opencode-go/qwen3.7-plus",
-  "opencode-go/minimax-m3",
-  "opencode-go/deepseek-v4-pro",
-  "opencode-go/mimo-v2.5-pro",
-  "opencode-go/mimo-v2.5",
-  "gemini-3.8-flash",
-)
-export type AgentModel = typeof AgentModel.Type
+export const ModelHarness = Schema.Literal("claude", "codex", "opencode", "antigravity")
+export type ModelHarness = typeof ModelHarness.Type
+
+/** A harness a base model id can be routed to with an `@` suffix. */
+export const RouteHarness = Schema.Literal("claude", "codex", "opencode")
+export type RouteHarness = typeof RouteHarness.Type
+
+/** Every provider's current harness; a base model id keeps it, and a route id overrides it for one run. */
+export const DEFAULT_MODEL_HARNESS = {
+  anthropic: "claude",
+  openai: "codex",
+  openrouter: "claude",
+  zai: "claude",
+  deepseek: "claude",
+  minimax: "claude",
+  moonshot: "claude",
+  opencode: "opencode",
+  "opencode-go": "opencode",
+  google: "antigravity",
+} as const satisfies Record<ModelProvider, ModelHarness>
+
+/**
+ * Base model ids per provider, passed to the provider's CLI (`claude --model`, the Codex app-server thread's
+ * `model`, the ACP `model` config option of OpenCode, which names OpenCode's own provider first (`opencode` free,
+ * `opencode-go` Go), and of Antigravity CLI). Grouping by provider is what lets `AgentModel` promise exactly the
+ * route ids the catalog generates: a provider's models only route to its documented harnesses.
+ */
+const BASE_MODEL_IDS = {
+  anthropic: [
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+    "claude-fable-5",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-opus-4-5",
+    "claude-haiku-4-5",
+  ],
+  openai: [
+    "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6.1-terra",
+    "gpt-6-luna",
+    "gpt-6-sol",
+  ],
+  openrouter: [
+    "anthropic/claude-fable-5.1",
+    "anthropic/claude-opus-5.5",
+    "anthropic/claude-sonnet-5.5",
+    "anthropic/claude-haiku-5.5",
+  ],
+  zai: [
+    "glm-5.3[1m]",
+    "glm-5.3-flash[1m]",
+    "glm-5.3-flashx[1m]",
+    "glm-5.2[1m]",
+  ],
+  deepseek: [
+    "deepseek-flash[1m]",
+    "deepseek-v4-pro",
+  ],
+  minimax: [
+    "MiniMax-M3.1-Flash[1m]",
+    "MiniMax-M3[1m]",
+  ],
+  moonshot: [
+    "kimi-k3.1-pro",
+    "kimi-k3.1-pro-highspeed",
+    "kimi-k3[1m]",
+    "kimi-k2.7-code",
+  ],
+  opencode: [
+    "opencode/big-pickle",
+    "opencode/glm-5.3-flash-free",
+    "opencode/deepseek-v4.1-flash-free",
+    "opencode/mimo-v2.6-flash-free",
+    "opencode/beam-free",
+    "opencode/crouton-alpha-free",
+    "opencode/flint-40b-free",
+    "opencode/nemotron-3.5-lightning-free",
+    "opencode/nemotron-3.5-super-vl-free",
+    "opencode/pulse-alpha-free",
+  ],
+  "opencode-go": [
+    "opencode-go/kimi-k3.1-pro",
+    "opencode-go/minimax-m3.1-flash",
+    "opencode-go/mimo-v2.6-pro",
+    "opencode-go/mimo-v2.6-flash",
+    "opencode-go/grok-4.7",
+    "opencode-go/step-5-preview",
+    "opencode-go/deepseek-v4.1-flash",
+    "opencode-go/hy4-preview",
+    "opencode-go/glm-5.3-flash",
+    "opencode-go/qwen3.8-flash",
+    "opencode-go/glm-5.3",
+    "opencode-go/qwen3.8-max",
+    "opencode-go/kimi-k3",
+    "opencode-go/hy3",
+    "opencode-go/longcat-2.0",
+    "opencode-go/glm-5.2",
+    "opencode-go/kimi-k2.7-code",
+    "opencode-go/qwen3.7-plus",
+    "opencode-go/minimax-m3",
+    "opencode-go/deepseek-v4-pro",
+    "opencode-go/mimo-v2.5-pro",
+    "opencode-go/mimo-v2.5",
+  ],
+  google: [
+    "gemini-3.8-flash",
+  ],
+} as const satisfies Record<ModelProvider, readonly string[]>
+
+type BaseAgentModel = { [P in ModelProvider]: (typeof BASE_MODEL_IDS)[P][number] }[ModelProvider]
+
+type RouteHarnessesFor<P extends ModelProvider> = P extends keyof typeof ROUTE_HARNESSES
+  ? (typeof ROUTE_HARNESSES)[P][number]
+  : never
+
+type ProviderOf<I extends string> = {
+  [P in ModelProvider]: I extends (typeof BASE_MODEL_IDS)[P][number] ? P : never
+}[ModelProvider]
+
+/** Harnesses the catalog offers for `I`: documented per provider, minus the provider's current harness. */
+type DocumentedHarnesses<I extends string> = Exclude<
+  RouteHarnessesFor<ProviderOf<I>>,
+  (typeof DEFAULT_MODEL_HARNESS)[ProviderOf<I>]
+>
+
+type ExcludedHarnesses<I extends string> = I extends keyof typeof ROUTE_EXCLUSIONS
+  ? (typeof ROUTE_EXCLUSIONS)[I][number]
+  : never
+
+/** The exact route ids the catalog can build, so the type and the schema cannot disagree. */
+type RouteAgentModel = {
+  [I in BaseAgentModel]: `${I}@${Exclude<DocumentedHarnesses<I>, ExcludedHarnesses<I>>}`
+}[BaseAgentModel]
+
+/**
+ * A base model id, or a route id that runs that model in another compatible harness. The schema below is generated
+ * from the catalog's supported routes, so no arbitrary `@harness` string is accepted.
+ */
+export type AgentModel = BaseAgentModel | RouteAgentModel
 
 export interface ModelInfo {
   readonly id: AgentModel
@@ -123,6 +200,10 @@ export interface ModelInfo {
   readonly shownByDefault: boolean
   /** Provider-advertised context window for Claude Code's auto-compaction. */
   readonly compactWindow?: number
+  /** The harness a route id selects; absent on a base id, which uses its provider's current harness. */
+  readonly harness?: ModelHarness
+  /** The model id the native API expects, without a route suffix or Claude Code's `[1m]` decoration. */
+  readonly upstreamModel?: string
 }
 
 const CLAUDE_ALL: readonly AgentEffort[] = ["low", "medium", "high", "xhigh", "max"]
@@ -141,7 +222,7 @@ const OC_LOW_TO_MAX: readonly AgentEffort[] = ["low", "medium", "high", "xhigh",
  * its own. OpenCode Go's are the Go plan's models that no other provider here runs (its
  * Claude, GPT and Gemini models are left to theirs), and none of its free or contributor ones.
  */
-export const AGENT_MODELS: readonly ModelInfo[] = [
+const BASE_AGENT_MODELS: readonly ModelInfo[] = [
   { id: "claude-fable-5-1", provider: "anthropic", name: "Claude Fable 5.1", efforts: CLAUDE_ALL, shownByDefault: true },
   { id: "claude-opus-5-5", provider: "anthropic", name: "Claude Opus 5.5", efforts: CLAUDE_ALL, shownByDefault: true },
   { id: "claude-sonnet-5-5", provider: "anthropic", name: "Claude Sonnet 5.5", efforts: CLAUDE_ALL, shownByDefault: true },
@@ -216,6 +297,94 @@ export const AGENT_MODELS: readonly ModelInfo[] = [
   { id: "gemini-3.8-flash", provider: "google", name: "Gemini 3.8 Flash", efforts: ["low", "medium", "high"], shownByDefault: true },
 ]
 
+/**
+ * The additional harnesses each provider's models can run in. A base id keeps the provider's current harness; these
+ * are the only `@harness` routes the catalog offers. Free OpenCode models and Google's Antigravity models stay on
+ * their native harness; per-model exclusions below remove models a native route does not document.
+ */
+const ROUTE_HARNESSES = {
+  anthropic: ["opencode"],
+  openai: ["opencode"],
+  openrouter: ["codex", "opencode"],
+  zai: ["codex", "opencode"],
+  deepseek: ["codex", "opencode"],
+  minimax: ["codex", "opencode"],
+  moonshot: ["codex", "opencode"],
+  // The Go gateway is the one OpenCode provider whose models may run in Claude Code or Codex.
+  "opencode-go": ["claude", "codex"],
+} as const satisfies Partial<Record<ModelProvider, readonly RouteHarness[]>>
+
+const ROUTE_HARNESS_LABELS: Record<RouteHarness, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  opencode: "OpenCode",
+}
+
+/**
+ * Efforts a native API documents differently from the provider's Claude Code guide. DeepSeek's Codex integration
+ * declares low/high/max only, so a route must not offer the Claude route's medium level.
+ */
+const ROUTE_EFFORTS: Readonly<Record<string, readonly AgentEffort[]>> = {
+  "deepseek-flash[1m]@codex": ["low", "high", "max"],
+  "deepseek-v4-pro@codex": ["low", "high", "max"],
+}
+
+/**
+ * Base models whose provider's native route does not support the model. Kimi's Responses endpoint lists
+ * `kimi-k3.1-pro`, `kimi-k3.1-pro-highspeed` and `kimi-k3` only, so its older code model keeps Claude/OpenCode routes.
+ */
+const ROUTE_EXCLUSIONS = {
+  "kimi-k2.7-code": ["codex"],
+} as const satisfies Readonly<Record<string, readonly RouteHarness[]>>
+
+/** The model id the routed harness's native API expects. OpenCode's own catalog prefix stays only on its native route. */
+const routedUpstreamId = (base: ModelInfo, harness: RouteHarness): string => {
+  const id = base.id.replace(/@(?:claude|codex|opencode)$/, "")
+  // Claude Code's 1m-context decoration is not part of the model id a native OpenAI/OpenCode API receives.
+  const native = id.replace(/\[1m\]$/i, "")
+  if (base.provider === "opencode-go") return native.replace(/^opencode-go\//, "")
+  // Claude Code needs the decoration; a native OpenAI/OpenCode API must not receive it.
+  return harness === "claude" ? id : native
+}
+
+const routeModel = (base: ModelInfo, harness: RouteHarness): ModelInfo => {
+  const id = `${base.id}@${harness}` as AgentModel
+  // OpenCode's ACP thought_level option is cosmetic for the openai-compatible package (it does not forward the level
+  // upstream), so its routes advertise no thinking levels instead of silently running the provider default.
+  const efforts = harness === "opencode" ? [] : ROUTE_EFFORTS[id] ?? base.efforts
+  const defaultEffort =
+    base.defaultEffort !== undefined && efforts.includes(base.defaultEffort) ? base.defaultEffort : undefined
+  return {
+    id,
+    provider: base.provider,
+    name: `${base.name} via ${ROUTE_HARNESS_LABELS[harness]}`,
+    efforts,
+    ...(defaultEffort === undefined ? {} : { defaultEffort }),
+    // Route entries stay off the default picker so stored defaults and current behavior do not change.
+    shownByDefault: false,
+    ...(base.compactWindow === undefined ? {} : { compactWindow: base.compactWindow }),
+    harness,
+    upstreamModel: routedUpstreamId(base, harness),
+  }
+}
+
+/**
+ * Every model the box can run, in picker order: each base model followed by its supported route variants. A route id
+ * only selects another compatible harness; the credential provider remains the base model's provider.
+ */
+export const AGENT_MODELS: readonly ModelInfo[] = BASE_AGENT_MODELS.flatMap((base) => {
+  const excluded = (ROUTE_EXCLUSIONS as Readonly<Record<string, readonly RouteHarness[]>>)[base.id] ?? []
+  const documented = (ROUTE_HARNESSES as Partial<Record<ModelProvider, readonly RouteHarness[]>>)[base.provider] ?? []
+  const routes = documented.filter(
+    (harness) => harness !== DEFAULT_MODEL_HARNESS[base.provider] && !excluded.includes(harness),
+  )
+  return [base, ...routes.map((harness) => routeModel(base, harness))]
+})
+
+/** Model ids accepted by the protocol: every base id plus the supported route ids generated above. */
+const AGENT_MODEL_IDS = AGENT_MODELS.map((model) => model.id) as [AgentModel, ...AgentModel[]]
+export const AgentModel = Schema.Literal(...AGENT_MODEL_IDS)
+
 export interface ModelProviderInfo {
   readonly id: ModelProvider
   readonly name: string
@@ -249,6 +418,28 @@ export const modelInfo = (id: AgentModel): ModelInfo => {
   const info = AGENT_MODELS.find((m) => m.id === id)
   if (info === undefined) throw new Error(`model ${id} is missing from AGENT_MODELS`)
   return info
+}
+
+/**
+ * `id` as an `AgentModel` when the catalog offers it, else undefined. Use it wherever an untrusted string becomes a
+ * model id, so a client never turns an unsupported route into the bare `Error` from `modelInfo`.
+ */
+export const parseAgentModel = (id: string): AgentModel | undefined =>
+  AGENT_MODELS.some((model) => model.id === id) ? (id as AgentModel) : undefined
+
+/** The harness a model runs in: the route's explicit choice, else its provider's current harness. */
+export const modelHarness = (id: AgentModel): ModelHarness => {
+  const info = modelInfo(id)
+  return info.harness ?? DEFAULT_MODEL_HARNESS[info.provider]
+}
+
+/** The model id to send to the routed harness's native API, never the protocol's route id. */
+export const modelUpstreamId = (id: AgentModel): string => {
+  const info = modelInfo(id)
+  if (info.upstreamModel !== undefined) return info.upstreamModel
+  const base = id.replace(/@(?:claude|codex|opencode)$/, "")
+  // Native OpenCode/Claude refs keep their own decorations and provider prefix; only a Codex route drops `[1m]`.
+  return modelHarness(id) === "codex" ? base.replace(/\[1m\]$/i, "") : base
 }
 
 export const providerModels = (provider: ModelProvider): readonly ModelInfo[] =>
