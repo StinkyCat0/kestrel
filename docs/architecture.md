@@ -58,6 +58,19 @@ implementation; Expo bundles that surface locally for native iOS/Android through
 as ordinary GitHub Markdown links with explicit repository, kind and number, so drafts and messages cross UI
 surfaces without a protocol change. See [mobile references](../packages/mobile/README.md#github-references).
 
+Chat box availability is shown by the box activity indicator, not a global offline banner or sidebar connectivity
+alert. Losing the live connection warns only while an agent turn is running; idle reconnects stay quiet. Failed
+prompt submissions still show an error beside the composer and keep the draft available to retry. Desktop send
+errors use the same frosted-glass warning style as the floating banners.
+Reconnecting refreshes the thread, messages and runs; fresh snapshots replace stale pre-disconnect state while
+preserving live events that arrive during the refresh.
+Relay connectivity failures carry the `BoxOffline` error tag; an application's 502/503/504 alone is not evidence
+that its box is down. Query-error selection preserves actionable failures even when another query is unreachable.
+If an essential initial snapshot fails with no cached data, the conversation shows an inline load-failure state
+instead of an empty transcript or a recurring offline banner.
+For relayed mobile boxes, failed health requests leave availability unknown; only a successful box-status response
+declares the relay offline. New-thread sends attempt the request when availability is unknown and report its error.
+
 In desktop Settings, Profile manages GitHub repository access, including connecting and reconnecting OAuth.
 The repository picker sends users without a GitHub connection to Profile to set up that access.
 Connections contains only model access: **Harnesses/Subscriptions** groups subscription sign-ins and installed

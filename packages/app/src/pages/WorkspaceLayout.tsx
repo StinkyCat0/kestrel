@@ -2,8 +2,8 @@ import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Outlet } from "react-router-dom"
 import { PanelLeftOpen } from "lucide-react"
+import { isUnreachableError } from "@/api/errors"
 import { queries } from "@/api/queries"
-import { BoxOfflineBanner } from "@/components/BoxStatus"
 import { FloatingNotices } from "@/components/FloatingNotice"
 import { ReconnectBanner } from "@/components/ReconnectBanner"
 import { ThreadSidebar } from "@/components/ThreadSidebar"
@@ -35,13 +35,12 @@ export function WorkspaceLayout() {
           <div className="flex min-h-0 flex-1 pt-3">
             <ThreadSidebar
               tasks={tasks.data}
-              error={tasks.error}
+              error={isUnreachableError(tasks.error) ? null : tasks.error}
               collapsed={collapsed}
               onCollapse={() => setCollapsed(true)}
             />
             <div className="relative mr-3 mb-3 flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl bg-card shadow-soft">
               <FloatingNotices>
-                <BoxOfflineBanner />
                 <ReconnectBanner />
               </FloatingNotices>
               {collapsed && (

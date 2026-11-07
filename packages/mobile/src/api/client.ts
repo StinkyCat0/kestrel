@@ -46,30 +46,9 @@ import {
   type UserBox,
 } from "@cloudagents/protocol";
 import { fetchCredentials } from "@/auth/session";
-
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
+import { ApiError, responseError } from "./errors";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-
-function errorMessage(text: string, fallback: string): string {
-  try {
-    const body: unknown = JSON.parse(text);
-    if (typeof body === "object" && body !== null && "message" in body && typeof body.message === "string") {
-      return body.message;
-    }
-  } catch {
-    // Not JSON; fall through to the raw text.
-  }
-  return text || fallback;
-}
 
 /** A box the apps reach directly: the user's own box, or their managed box. `null` everywhere means Kestrel's box, relayed by the Worker. */
 export type ActiveBox = Pick<UserBox, "id" | "url">;
@@ -205,7 +184,7 @@ async function send<A, I>(
   }
 
   const text = await res.text();
-  if (!res.ok) throw new ApiError(res.status, errorMessage(text, res.statusText));
+  if (!res.ok) throw responseError(res.status, text, res.statusText);
 
   // 204 and other empty bodies carry no JSON; they decode as `undefined`.
   let json: unknown;

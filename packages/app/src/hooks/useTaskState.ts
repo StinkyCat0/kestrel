@@ -3,7 +3,7 @@ import { useQueries, useQueryClient } from "@tanstack/react-query"
 import type { DesktopStatus, Message, Run, RunItems } from "@cloudagents/protocol"
 import { openTaskEvents } from "@/api/events"
 import { keys, queries, storeTask, upsert } from "@/api/queries"
-import { errorText } from "@/util"
+import { threadErrors } from "./threadErrors"
 
 const MAX_LOG_LINES = 2000
 const RECONNECT_MS = 2000
@@ -58,6 +58,7 @@ export function useTaskState(taskId: string) {
     const close = openTaskEvents(taskId, {
       onOpen: () => {
         setDisconnected(false)
+        // Prefix invalidation refreshes task, messages and runs, including events missed while disconnected.
         void queryClient.invalidateQueries({ queryKey: keys.task(taskId) })
       },
       onEvent: (event) => {
@@ -118,12 +119,8 @@ export function useTaskState(taskId: string) {
     }
   }, [taskId, generation, queryClient])
 
-  const failed = [task, messages, runs].find((q) => q.error)
-  const error = disconnected
-    ? "Live updates disconnected; reconnecting…"
-    : failed?.error
-      ? errorText(failed.error)
-      : null
+  const running = runs.data?.some((run) => run.status === "running") === true
+  const { error, loadError } = threadErrors([task, messages, runs], disconnected, running)
 
   return {
     task: task.data ?? null,
@@ -132,5 +129,6 @@ export function useTaskState(taskId: string) {
     output,
     desktopOpens,
     error,
+    loadError,
   }
 }
