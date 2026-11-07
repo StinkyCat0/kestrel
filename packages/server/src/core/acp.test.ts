@@ -164,6 +164,104 @@ describe("ACP driver", () => {
     expect(h.last()).toEqual({ jsonrpc: "2.0", id: 12, result: { outcome: { outcome: "cancelled" } } })
   })
 
+  test("Devin resolves the advertised model variant and still sets thought_level", () => {
+    const configOptions = [
+      {
+        id: "model",
+        category: "model",
+        type: "select",
+        currentValue: "swe-2-flash-medium",
+        options: [{ value: "swe-2-flash-medium" }, { value: "swe-2-flash-high" }, { value: "swe-2-flash-max" }],
+      },
+      thoughtOption("thought_level", ["medium", "high", "max"]),
+    ]
+    const h = harness({ provider: "devin", model: "swe-2-flash", effort: "max" })
+    h.driver.start()
+    h.reply({})
+    h.reply({ sessionId: "s1", configOptions })
+    expect(h.last()).toMatchObject({ method: "session/set_config_option", params: { sessionId: "s1", configId: "model", value: "swe-2-flash-max" } })
+    h.reply({ configOptions })
+    expect(h.last()).toMatchObject({ method: "session/set_config_option", params: { sessionId: "s1", configId: "thought_level", value: "max" } })
+    h.reply({ configOptions: [] })
+    expect(h.last().method).toBe("session/prompt")
+  })
+
+  test("model variant resolution is Devin-only", () => {
+    const configOptions = [
+      {
+        id: "model",
+        category: "model",
+        type: "select",
+        currentValue: "swe-2-high",
+        options: [{ value: "swe-2-medium" }, { value: "swe-2-high" }, { value: "swe-2-max" }],
+      },
+      thoughtOption("thought_level", ["medium", "high", "max"]),
+    ]
+    const h = harness({ provider: "opencode", model: "swe-2", effort: "max" })
+    h.driver.start()
+    h.reply({})
+    h.reply({ sessionId: "s1", configOptions })
+    expect(h.last()).toMatchObject({ method: "session/set_config_option", params: { sessionId: "s1", configId: "model", value: "swe-2" } })
+  })
+
+  test("Devin falls back to the session's current variant when the effort is not advertised", () => {
+    const configOptions = [
+      {
+        id: "model",
+        category: "model",
+        type: "select",
+        currentValue: "swe-2-high",
+        options: [{ value: "swe-2-medium" }, { value: "swe-2-high" }, { value: "swe-2-max" }],
+      },
+      thoughtOption("thought_level", ["medium", "high", "max"]),
+    ]
+    const h = harness({ provider: "devin", model: "swe-2", effort: "low" })
+    h.driver.start()
+    h.reply({})
+    h.reply({ sessionId: "s1", configOptions })
+    expect(h.last()).toMatchObject({ method: "session/set_config_option", params: { sessionId: "s1", configId: "model", value: "swe-2-high" } })
+    h.reply({ configOptions })
+    expect(h.last().method).toBe("session/prompt")
+  })
+
+  test("Devin passes through an advertised family anchor", () => {
+    const configOptions = [
+      {
+        id: "model",
+        category: "model",
+        type: "select",
+        currentValue: "swe-2",
+        options: [{ value: "adaptive" }, { value: "swe-2" }, { value: "swe-2-flash" }],
+      },
+    ]
+    const h = harness({ provider: "devin", model: "swe-2", effort: "high" })
+    h.driver.start()
+    h.reply({})
+    h.reply({ sessionId: "s1", configOptions })
+    expect(h.last()).toMatchObject({ method: "session/set_config_option", params: { sessionId: "s1", configId: "model", value: "swe-2" } })
+    h.reply({ configOptions: [] })
+    expect(h.last().method).toBe("session/prompt")
+  })
+
+  test("Devin keeps the requested id when no advertised variant matches", () => {
+    const configOptions = [
+      {
+        id: "model",
+        category: "model",
+        type: "select",
+        currentValue: "adaptive",
+        options: [{ value: "adaptive" }, { value: "fusion" }],
+      },
+    ]
+    const h = harness({ provider: "devin", model: "swe-2-flash", effort: "medium" })
+    h.driver.start()
+    h.reply({})
+    h.reply({ sessionId: "s1", configOptions })
+    expect(h.last()).toMatchObject({ method: "session/set_config_option", params: { sessionId: "s1", configId: "model", value: "swe-2-flash" } })
+    h.reply({ configOptions: [] })
+    expect(h.last().method).toBe("session/prompt")
+  })
+
   test("an agent that exits mid-turn fails the run", () => {
     const h = harness()
     h.driver.start()
