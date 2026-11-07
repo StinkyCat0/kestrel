@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { Effect, Layer, ManagedRuntime } from "effect"
@@ -7,6 +7,7 @@ import type { CliAuthStatus } from "@cloudagents/protocol"
 import type { ServerConfig } from "./config"
 import { Config } from "./config"
 import { CliAuth, CliAuthLive } from "./cliauth"
+import { findExecutable } from "./sandbox"
 
 const roots: string[] = []
 
@@ -163,7 +164,12 @@ fi
 exit 0
 `
 
-describe.skipIf(process.platform === "win32")("Devin sign-in", () => {
+// Terminal sign-in needs a real `script` to allocate the pseudo-terminal; skip where the host has none. Resolve it from
+// the test host's PATH (NixOS keeps it outside /usr/bin and /bin) so the shim below can exec the same binary production finds.
+const scriptPath = process.platform === "win32" ? null : findExecutable("script", process.env.PATH ?? "")
+const hasScript = scriptPath !== null
+
+describe.skipIf(!hasScript)("Devin sign-in", () => {
   const runtimes: Array<ManagedRuntime.ManagedRuntime<CliAuth, never>> = []
   afterEach(async () => {
     for (const runtime of runtimes.splice(0)) await runtime.dispose()
@@ -172,6 +178,11 @@ describe.skipIf(process.platform === "win32")("Devin sign-in", () => {
   const devinAuth = (root: string) => {
     writeFileSync(join(root, "bin", "devin"), FAKE_DEVIN)
     chmodSync(join(root, "bin", "devin"), 0o755)
+    if (scriptPath === null) throw new Error("script is not installed on this host")
+    // Record the SHELL `script` was given, then hand off to the real script resolved from the host PATH.
+    const script = join(root, "bin", "script")
+    writeFileSync(script, `#!/bin/sh\necho "SHELL=$SHELL" > "$HOME/script.log"\nexec '${scriptPath}' "$@"\n`)
+    chmodSync(script, 0o755)
     const config = {
       dataDir: root,
       sandbox: "off",
@@ -197,6 +208,14 @@ describe.skipIf(process.platform === "win32")("Devin sign-in", () => {
     const status = await run((auth) => auth.submitCode("alice", "devin-cli", "good-code"))
     expect(status).toEqual({ provider: "devin-cli", loggedIn: true, account: null })
     expect(JSON.stringify(status)).not.toContain("secret-devin-token")
+  })
+
+  test("gives script a shell from the CLI toolchain, not the user's login shell", async () => {
+    const root = rootFor()
+    const run = devinAuth(root)
+    await run((auth) => auth.startLogin("alice", "devin-cli"))
+    const shell = readFileSync(join(root, "users", "alice", "script.log"), "utf8").trim()
+    expect(shell).toMatch(/(^|\/)(bash|sh)$/)
   })
 
   test("reports the CLI's refusal of a code without echoing it", async () => {
