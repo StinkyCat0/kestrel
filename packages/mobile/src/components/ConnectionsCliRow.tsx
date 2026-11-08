@@ -27,6 +27,21 @@ interface Props {
   provider: CliProvider;
 }
 
+/**
+ * The active login, plus the number of other signed-in accounts when there are several, e.g.
+ * "Signed in as name@example.com +2 more". Older boxes report only `connection.account`.
+ */
+function accountDescription(
+  connection: Connection,
+  accounts: readonly { id: string; account: string | null }[],
+  activeAccountId: string | undefined,
+): string {
+  const account = accounts.find((candidate) => candidate.id === activeAccountId)?.account
+    ?? connection.account;
+  const others = accounts.length - 1;
+  return `${account ? `Signed in as ${account}` : "Signed in"}${others > 0 ? ` +${others} more` : ""}`;
+}
+
 /** Subscription logins of the official CLIs. The sign-in runs on the agent box; this row only relays the provider's own steps. */
 export function ConnectionsCliRow({ connection, provider }: Props) {
   const { api } = useApiClient();
@@ -52,6 +67,7 @@ export function ConnectionsCliRow({ connection, provider }: Props) {
   const activeAccountId = connection.activeAccountId
     ?? accounts.find((account) => account.account === connection.account)?.id
     ?? accounts[0]?.id;
+  const description = accountDescription(connection, accounts, activeAccountId);
   // The account a sign-in is adding; another login may already keep the connection connected.
   const pendingAccountId = login?.accountId;
   const completed = login !== null && (pendingAccountId === undefined
@@ -258,13 +274,13 @@ export function ConnectionsCliRow({ connection, provider }: Props) {
               onPress={() => setAccountMenu(true)}
             >
               <Text style={connectionStyles.muted}>
-                {connection.account ? `Signed in as ${connection.account}` : "Signed in"}
+                {description}
               </Text>
               <ChevronDown size={14} color={colors.mutedForeground} />
             </Pressable>
           ) : (
             <Text style={connectionStyles.muted}>
-              {connection.account ? `Signed in as ${connection.account}` : "Signed in"}
+              {description}
             </Text>
           )}
           <View style={connectionStyles.actions}>
