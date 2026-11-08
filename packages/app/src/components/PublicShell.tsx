@@ -76,9 +76,6 @@ export function PublicShell() {
           <NavLink to="/pricing" className={navLinkClass}>
             Pricing
           </NavLink>
-          <NavLink to="/download" className={navLinkClass}>
-            Download
-          </NavLink>
           <NavLink to="/waitlist" className={navLinkClass}>
             Waitlist
           </NavLink>
