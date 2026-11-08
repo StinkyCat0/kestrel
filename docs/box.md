@@ -206,7 +206,11 @@ The default STUN server, `stun:stun.cloudflare.com:3478`, lets both ends discove
 
 To enable managed TURN for the fleet, create a [Cloudflare Realtime TURN key](https://developers.cloudflare.com/realtime/turn/generate-credentials/) and set **both** `KESTREL_TURN_KEY_ID` and `KESTREL_TURN_API_TOKEN` on the control Worker. Keep the API token only in Worker secrets; do not put it on boxes or in client builds. Update/restart boxes onto this version. No per-box TURN settings or app update are needed: managed boxes, registered user boxes and the legacy relay box authenticate `POST /box/turn` using their existing box identity.
 
-The control plane issues one-hour credentials, caches them per box until five minutes before expiry and coalesces concurrent requests. Boxes also cache credentials until that margin and resolve them once per `rtc.config`; that same list is what the box's own peer uses, so an offer never waits on the control plane and a failed fetch leaves both peers on the box's own configuration. Retries requesting a new config refresh them. Credentials are bearer access to paid relay bandwidth, not thread authorization; a viewer can reuse them until expiry. The provider API token never leaves the Worker. Authentication is checked even on cache hits. A managed-TURN allocation that gets no answer is given up after werift's STUN retransmissions over UDP (50 ms doubling over seven sends, about 6.3 s), then the TCP fallback connect is capped at two seconds, so an unreachable managed relay can delay the answer by roughly eight seconds, still inside the viewer's 15-second attempt. An operator-configured TURN server keeps werift's default eight-second TCP/TLS wait, since it may be far away or reached over TLS.
+The control plane issues one-hour credentials, caches them per box until five minutes before expiry and coalesces concurrent requests. Boxes also cache credentials until that margin and resolve them once per `rtc.config`; an offer never waits on the control plane and a failed fetch leaves both peers on the box's own configuration. Retries requesting a new config refresh them. Credentials are bearer access to paid relay bandwidth, not thread authorization; a viewer can reuse them until expiry. The provider API token never leaves the Worker. Authentication is checked even on cache hits.
+
+The browser receives the full provider ICE list. The box selects its managed `turns:...:443?transport=tcp` endpoint: werift 0.26 uses only the first TURN URL, and its UDP-to-TCP fallback retries the same host and port rather than trying the later TLS endpoints. Passing through the provider's UDP-first list therefore loses the box relay when port 3478 is blocked, even if TLS/443 works. Direct ICE candidates remain enabled; only a selected relay path carries media over TLS. The managed TCP/TLS connect is capped at two seconds. Operator-configured TURN keeps its original URL order and werift's default eight-second connect wait.
+
+**Trade-off:** this is TLS/443-only for the box's managed allocation, not a preference with a UDP fallback. TCP retransmissions can head-of-line block later RTP packets and stall media on lossy paths compared with UDP; that cost has not been benchmarked here. A box that can reach TURN/3478 but cannot reach TLS/443 now loses its managed relay, even though UDP would have worked previously. Direct ICE may still connect; otherwise the session fails. This chooses the commonly permitted TLS/443 path over UDP relay performance and UDP-only egress compatibility. Operators needing UDP-first allocation can explicitly configure local TURN, which bypasses managed selection, but then retain werift's first-URL limitation on blocked-UDP networks.
 
 Neither provider setting configured returns 204 and retains local ICE; partial configuration or provider failure returns a sanitized error. A box waits at most three seconds, logs a warning on failure and retains direct connectivity; it retries on a later config request. Explicit local TURN (a `turn` secret or `turn:`/`turns:` ICE URL) takes precedence and skips managed credentials entirely. Unregistered standalone boxes must supply their own TURN.
 
@@ -229,9 +233,37 @@ Limits today:
 - The SPS says level 4.0, the level for 1080p30 and 720p60, whatever level the browser offered, since negotiation ignores level. A browser that offers only a lower level may fail to decode large desktops. Hardware-only decoders may refuse a stream; the viewer then shows a decoder stuck asking for keyframes.
 - Constrained Baseline is used only while a Baseline-only viewer is connected. It has no B-frames and uses CAVLC, so it costs about 50% more bytes per frame than High at the same quality setting (measured on a synthetic scroll).
 - Pacing follows receiver loss reports, but nothing adapts the encoder's bitrate to the path, so a narrow path loses frames rather than quality.
-- A relay-only path (both peers behind restrictive networks, one of them CGNAT) is untested against the production provider; the box's allocation uses werift's TURN client over UDP with its TCP fallback.
+- A relay-only path is verified locally with coturn accepting only TLS/443, including desktop RTP and input. The production provider, real CGNAT, Safari and physical phones still need rollout verification. Networks that require an HTTP proxy or block non-HTTP TLS can still prevent TURN even on port 443.
 - TURN credentials expire after an hour. If the path then fails, the viewer reconnects and its next attempt gets a new one.
 - The peer lives with its WebSocket, so a dropped WebSocket interrupts video until it reconnects.
+
+##### TLS-only TURN regression
+
+`bun test packages/server/src/desktop/webrtc.test.ts` automatically checks authenticated UDP/TLS allocations on ephemeral loopback ports: managed TLS/443 selection, original operator ordering, managed lists without TLS/443, and the managed-only connection deadline. It needs neither coturn nor privileged ports. The separate coturn exercise below additionally verifies relay-to-relay media and input.
+
+`packages/server/scripts/test-desktop-turn-tls.ts` exercises real allocations and desktop RTP/input, not copied peer settings. Run it in an isolated Linux environment with coturn and Node 22; do not run this fixture on a production box. Ports 443, 3478 and 5349 must be unused. The fixed credentials and loopback-peer permission below are **test-only**, and the listener binds only loopback.
+
+```sh
+mkdir -p /tmp/kestrel-turn-test
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -keyout /tmp/kestrel-turn-test/key.pem -out /tmp/kestrel-turn-test/cert.pem \
+  -subj /CN=localhost -addext subjectAltName=DNS:localhost,IP:127.0.0.1
+sudo turnserver -n --listening-ip=127.0.0.1 --relay-ip=127.0.0.1 \
+  --tls-listening-port=443 --listening-port=15478 --no-udp --no-tcp --no-dtls \
+  --cert=/tmp/kestrel-turn-test/cert.pem --pkey=/tmp/kestrel-turn-test/key.pem \
+  --realm=localhost --user=smoke:smoke-password --lt-cred-mech \
+  --allow-loopback-peers --no-cli --no-multicast-peers \
+  --pidfile=/tmp/kestrel-turn-test/turn.pid --log-file=stdout --relay-threads=1
+```
+
+In a second terminal, from the worktree root:
+
+```sh
+bun build packages/server/scripts/test-desktop-turn-tls.ts --target=node --outfile=/tmp/kestrel-turn-test/check.mjs
+NODE_EXTRA_CA_CERTS=/tmp/kestrel-turn-test/cert.pem node /tmp/kestrel-turn-test/check.mjs
+```
+
+The managed case must allocate TLS/443 and deliver the exact RTP payload and keyboard command through a relay-to-relay pair. The operator case must retain UDP-first ordering and get no box relay with this TLS-only fixture. Reverting managed TLS preference makes the first case fail. Stop coturn with Ctrl-C afterward and remove `/tmp/kestrel-turn-test`. On Windows, bundle to a Windows temporary file and run that bundle with Node inside WSL alongside coturn.
 
 ### Toolkits
 
