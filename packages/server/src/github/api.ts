@@ -301,6 +301,22 @@ export interface GitHubShape {
     method: "merge" | "squash" | "rebase",
   ) => Effect.Effect<void, GitHubError>
   readonly createComment: (token: string, repo: RepoSlug, number: number, body: string) => Effect.Effect<PostedComment, GitHubError>
+  /**
+   * Writes one file to `branch` through the Contents API. The branch is created from `createFrom` when it does not
+   * exist yet (an already-existing ref is fine); an existing file at `path` is replaced using its current sha, so a
+   * repeated write does not fail. The pull request's own branches are never named here.
+   */
+  readonly putFile: (
+    token: string,
+    repo: RepoSlug,
+    input: {
+      readonly path: string
+      readonly branch: string
+      readonly bytes: Uint8Array
+      readonly message: string
+      readonly createFrom?: string
+    },
+  ) => Effect.Effect<{ readonly path: string; readonly branch: string; readonly htmlUrl: string }, GitHubError>
   /** Replies in the thread of a review comment on the pull request's diff. */
   readonly replyToReviewComment: (token: string, repo: RepoSlug, number: number, commentId: number, body: string) => Effect.Effect<PostedComment, GitHubError>
   readonly editComment: (token: string, repo: RepoSlug, kind: CommentKind, commentId: number, body: string) => Effect.Effect<PostedComment, GitHubError>
@@ -437,6 +453,13 @@ const CommentPostedBody = Schema.Struct({
   id: Schema.Number,
   html_url: Schema.String,
 })
+
+const GitRefBody = Schema.Struct({ object: Schema.Struct({ sha: Schema.String }) })
+
+/** A file read through the Contents API; the other fields (size, encoding, content) are not needed to replace it. */
+const FileContentsBody = Schema.Struct({ sha: Schema.String })
+
+const FilePutBody = Schema.Struct({ content: Schema.Struct({ path: Schema.String, html_url: Schema.String }) })
 
 const PullCommitsBody = Schema.Array(
   Schema.Struct({
@@ -902,6 +925,47 @@ export const GitHubLive = Layer.effect(
         }),
       )
 
+    /** Encodes each segment of a branch or file path, keeping the separators GitHub's routes expect. */
+    const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/")
+
+    /** Creates `branch` from `createFrom` unless it already exists; 422 means another writer created it first. */
+    const ensureBranch = (token: string, repo: RepoSlug, branch: string, createFrom?: string) =>
+      Effect.gen(function* () {
+        const present = yield* call(token, repo, "GET", `${repoPath(repo)}/git/ref/heads/${encodePath(branch)}`).pipe(
+          Effect.as(true),
+          Effect.catchIf((e) => e.status === 404, () => Effect.succeed(false)),
+        )
+        if (present) return
+        if (createFrom === undefined) {
+          return yield* Effect.fail(new GitHubError({ message: `GitHub has no branch ${branch} and no branch was named to create it from` }))
+        }
+        const source = yield* call(token, repo, "GET", `${repoPath(repo)}/git/ref/heads/${encodePath(createFrom)}`).pipe(
+          Effect.flatMap(decode(GitRefBody, "git reference")),
+        )
+        yield* call(token, repo, "POST", `${repoPath(repo)}/git/refs`, { ref: `refs/heads/${branch}`, sha: source.object.sha }).pipe(
+          Effect.asVoid,
+          Effect.catchIf((e) => e.status === 422, () => Effect.void),
+        )
+      })
+
+    const putFile: GitHubShape["putFile"] = (token, repo, input) =>
+      Effect.gen(function* () {
+        yield* ensureBranch(token, repo, input.branch, input.createFrom)
+        const path = encodePath(input.path)
+        const existing = yield* call(token, repo, "GET", `${repoPath(repo)}/contents/${path}?ref=${encodeURIComponent(input.branch)}`).pipe(
+          Effect.flatMap(decode(FileContentsBody, "file contents")),
+          Effect.map((file): string | undefined => file.sha),
+          Effect.catchIf((e) => e.status === 404, () => Effect.succeed(undefined)),
+        )
+        const written = yield* call(token, repo, "PUT", `${repoPath(repo)}/contents/${path}`, {
+          message: input.message,
+          content: Buffer.from(input.bytes).toString("base64"),
+          branch: input.branch,
+          ...(existing === undefined ? {} : { sha: existing }),
+        }).pipe(Effect.flatMap(decode(FilePutBody, "file contents")))
+        return { path: written.content.path, branch: input.branch, htmlUrl: written.content.html_url }
+      })
+
     const service: GitHubShape = {
       commitIdentity,
       findOpenPullRequest: (token, repo, head) =>
@@ -1012,6 +1076,7 @@ export const GitHubLive = Layer.effect(
           ),
         ),
       createComment: (token, repo, number, body) => postComment(token, repo, `${repoPath(repo)}/issues/${number}/comments`, body),
+      putFile,
       replyToReviewComment: (token, repo, number, commentId, body) =>
         postComment(token, repo, `${repoPath(repo)}/pulls/${number}/comments/${commentId}/replies`, body),
       editComment: (token, repo, kind, commentId, body) =>
