@@ -23,7 +23,7 @@ import { encodePng, resample, type RgbFrame } from "./frames"
 import { writeOpenboxConfig } from "./theme"
 import { isWsl } from "./platform"
 import { applyDesktopEvent } from "./desktop-state"
-import { detachViewer, idleTaskIdsFor, noteDesktopInput, type IdleTaskQuery } from "./idle"
+import { detachViewer, hasRunningApp, idleSessionView, idleTaskIdsFor, noteDesktopInput, type IdleTaskQuery } from "./idle"
 import { desktopStatus, HEIGHT, WIDTH, type DesktopStatusSource } from "./status"
 import {
   ENCODER_STABLE_MS,
@@ -1263,8 +1263,6 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
     // Whether the desktop renders on a renderer other than the one the GPU state now allows.
     const stale = (s: Session) =>
       (s.state === "starting" || s.state === "running") && s.renderer !== null && s.renderer !== desiredRenderer()
-    const liveApps = (s: Session) => [...s.apps.values()].some((app) => app.exit === null)
-
     // Restarts the task's desktop, attaching the viewers that are still watching it.
     const restart = (taskId: string) =>
       Effect.flatMap(snapshotAndStop(taskId), relaunch).pipe(
@@ -1274,7 +1272,7 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
     // Restarts a desktop onto the current renderer once none of its apps is running. A restart stops the desktop's
     // processes, so apps keep the renderer they started on until they exit (the exit hook in launch retries this).
     const restartIdle = (s: Session) =>
-      sessions.get(s.taskId) === s && stale(s) && !liveApps(s) ? restart(s.taskId) : Effect.void
+      sessions.get(s.taskId) === s && stale(s) && !hasRunningApp(s.apps.values()) ? restart(s.taskId) : Effect.void
 
     // The GPU arrived: restart each desktop whose renderer is stale and has no running app. A failed desktop that still
     // has viewers is retried, since they are waiting on it; one that fails again stays failed and the others still restart.
@@ -1448,14 +1446,16 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
       idleTaskIds: (query) =>
         Effect.sync(() =>
           idleTaskIdsFor(
-            [...sessions.values()].map((s) => ({
-              taskId: s.taskId,
-              state: s.state,
-              viewers: s.sinks.size,
-              // An app the agent started may still be rendering with no viewer watching: leave that desktop alone.
-              runningApps: liveApps(s) ? 1 : 0,
-              lastInputAt: s.lastInputAt,
-            })),
+            [...sessions.values()].map((s) =>
+              idleSessionView({
+                taskId: s.taskId,
+                state: s.state,
+                sinks: s.sinks,
+                // An app the agent started may still be rendering with no viewer watching: leave that desktop alone.
+                apps: s.apps.values(),
+                lastInputAt: s.lastInputAt,
+              }),
+            ),
             query,
           ),
         ),

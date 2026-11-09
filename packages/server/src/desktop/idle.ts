@@ -124,6 +124,35 @@ export interface IdleSessionView {
   readonly lastInputAt: number | null
 }
 
+/** The part of an agent-launched app the idle policy reads. */
+export interface IdleAppState {
+  readonly exit: unknown | null
+}
+
+/** True when any agent-launched app is still running; such a desktop may still be rendering with no viewer. */
+export const hasRunningApp = (apps: Iterable<IdleAppState>): boolean => {
+  for (const app of apps) if (app.exit === null) return true
+  return false
+}
+
+/** The session shape the manager projects into `IdleSessionView`. */
+export interface IdleSessionSource<TApp extends IdleAppState> {
+  readonly taskId: string
+  readonly state: DesktopState
+  readonly sinks: { readonly size: number }
+  readonly apps: Iterable<TApp>
+  readonly lastInputAt: number | null
+}
+
+/** The manager's session projection: viewers from sinks, running apps from the live app list. */
+export const idleSessionView = <TApp extends IdleAppState>(session: IdleSessionSource<TApp>): IdleSessionView => ({
+  taskId: session.taskId,
+  state: session.state,
+  viewers: session.sinks.size,
+  runningApps: hasRunningApp(session.apps) ? 1 : 0,
+  lastInputAt: session.lastInputAt,
+})
+
 /** The sessions that may stop for inactivity, by task id: the whole wiring behind `DesktopManager.idleTaskIds`. */
 export const idleTaskIdsFor = (sessions: Iterable<IdleSessionView>, query: IdleTaskQuery): ReadonlyArray<string> => {
   const ids: string[] = []

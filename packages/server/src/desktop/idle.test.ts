@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
   detachViewer,
+  hasRunningApp,
+  idleSessionView,
   idleTaskIdsFor,
   lastDesktopActivity,
   noteDesktopInput,
@@ -219,5 +221,42 @@ describe("detachViewer", () => {
     expect(session.lastInputAt).toBe(NOW - 10)
     detachViewer(session, "b", NOW + 1)
     expect(session.lastInputAt).toBe(NOW + 1)
+  })
+})
+
+describe("idleSessionView", () => {
+  const queryAt = (now: number): IdleTaskQuery => ({
+    now,
+    runs: 0,
+    recordings: 0,
+    lastActivityAt: NOW - IDLE_MS - 1,
+    idleAfterMs: IDLE_MS,
+  })
+  const session = (
+    overrides: { sinks?: Set<string>; apps?: Array<{ exit: unknown | null }>; lastInputAt?: number | null } = {},
+  ) => ({
+    taskId: "task",
+    state: "running" as const,
+    sinks: overrides.sinks ?? new Set<string>(),
+    apps: overrides.apps ?? [],
+    lastInputAt: overrides.lastInputAt ?? null,
+  })
+
+  test("input and streamInput's clock update keeps a recently driven desktop up", () => {
+    const s = session()
+    expect(idleTaskIdsFor([idleSessionView(s)], queryAt(NOW))).toEqual(["task"])
+    noteDesktopInput(s, NOW)
+    expect(idleTaskIdsFor([idleSessionView(s)], queryAt(NOW))).toEqual([])
+    expect(idleTaskIdsFor([idleSessionView(s)], queryAt(NOW + IDLE_MS - 1))).toEqual([])
+    expect(idleTaskIdsFor([idleSessionView(s)], queryAt(NOW + IDLE_MS))).toEqual(["task"])
+  })
+
+  test("a live agent app keeps the desktop up; an exited app does not", () => {
+    const live = session({ lastInputAt: NOW - IDLE_MS - 1, apps: [{ exit: null }] })
+    expect(hasRunningApp(live.apps)).toBe(true)
+    expect(idleTaskIdsFor([idleSessionView(live)], queryAt(NOW))).toEqual([])
+    const exited = session({ lastInputAt: NOW - IDLE_MS - 1, apps: [{ exit: 0 }] })
+    expect(hasRunningApp(exited.apps)).toBe(false)
+    expect(idleTaskIdsFor([idleSessionView(exited)], queryAt(NOW))).toEqual(["task"])
   })
 })
