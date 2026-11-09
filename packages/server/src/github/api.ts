@@ -928,13 +928,29 @@ export const GitHubLive = Layer.effect(
     /** Encodes each segment of a branch or file path, keeping the separators GitHub's routes expect. */
     const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/")
 
+    /**
+     * True only for an exact branch ref. GitHub answers `GET git/ref/heads/<branch>` with a 200 array of refs when no
+     * exact match exists but another branch shares the prefix (`kestrel-evidence/pr-1` vs `…/pr-12`), so a plain 2xx
+     * must not count as the branch existing.
+     */
+    const hasBranch = (token: string, repo: RepoSlug, branch: string) => {
+      const path = `${repoPath(repo)}/git/ref/heads/${encodePath(branch)}`
+      return send(token, "GET", path).pipe(
+        Effect.flatMap(({ status, text }) => {
+          if (status === 404) return Effect.succeed(false)
+          if (status < 200 || status >= 300) return Effect.fail(cliFailure(status, text, path))
+          return Effect.try({
+            try: () => JSON.parse(text) as unknown,
+            catch: () => new GitHubError({ message: "GitHub returned a non-JSON response" }),
+          }).pipe(Effect.map((json) => typeof json === "object" && json !== null && !Array.isArray(json)))
+        }),
+      )
+    }
+
     /** Creates `branch` from `createFrom` unless it already exists; 422 means another writer created it first. */
     const ensureBranch = (token: string, repo: RepoSlug, branch: string, createFrom?: string) =>
       Effect.gen(function* () {
-        const present = yield* call(token, repo, "GET", `${repoPath(repo)}/git/ref/heads/${encodePath(branch)}`).pipe(
-          Effect.as(true),
-          Effect.catchIf((e) => e.status === 404, () => Effect.succeed(false)),
-        )
+        const present = yield* hasBranch(token, repo, branch)
         if (present) return
         if (createFrom === undefined) {
           return yield* Effect.fail(new GitHubError({ message: `GitHub has no branch ${branch} and no branch was named to create it from` }))

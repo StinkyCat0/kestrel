@@ -693,6 +693,43 @@ test("putFile creates the evidence branch from the named base, then writes the i
   }
 })
 
+test("putFile creates the branch when the ref lookup returns a prefix-match array", async () => {
+  const branch = "kestrel-evidence/pr-7"
+  const path = ".kestrel/evidence/task-1/7-1700000000000.png"
+  const repoPrefix = "/repos/jarenm1/kestrel"
+  const gh = fakeGitHub(({ method, path: requestPath }) => {
+    // GitHub answers a prefix-only lookup with a 200 array, not a 404: pr-70 exists, pr-7 does not.
+    if (method === "GET" && requestPath === `${repoPrefix}/git/ref/heads/${branch}`) {
+      return { json: [{ ref: "refs/heads/kestrel-evidence/pr-70", object: { sha: "other" } }] }
+    }
+    if (method === "GET" && requestPath === `${repoPrefix}/git/ref/heads/main`) return { json: { object: { sha: "base123" } } }
+    if (method === "POST" && requestPath === `${repoPrefix}/git/refs`) return { status: 201, json: { ref: `refs/heads/${branch}`, object: { sha: "base123" } } }
+    if (method === "GET" && requestPath === `${repoPrefix}/contents/${path}?ref=kestrel-evidence%2Fpr-7`) return { status: 404 }
+    if (method === "PUT" && requestPath === `${repoPrefix}/contents/${path}`) {
+      return { status: 201, json: { content: { path, html_url: `https://github.com/jarenm1/kestrel/blob/${branch}/${path}` } } }
+    }
+    return { status: 500 }
+  })
+  try {
+    await runAgainst(
+      gh.url,
+      Effect.flatMap(GitHub, (github) =>
+        github.putFile("token", repo, { path, branch, bytes: new Uint8Array([1, 2, 3]), message: "evidence", createFrom: "main" }),
+      ),
+    )
+    expect(gh.requests.map(({ method, path: requestPath }) => `${method} ${requestPath}`)).toEqual([
+      `GET ${repoPrefix}/git/ref/heads/${branch}`,
+      `GET ${repoPrefix}/git/ref/heads/main`,
+      `POST ${repoPrefix}/git/refs`,
+      `GET ${repoPrefix}/contents/${path}?ref=kestrel-evidence%2Fpr-7`,
+      `PUT ${repoPrefix}/contents/${path}`,
+    ])
+    expect(gh.requests.find(({ method }) => method === "POST")?.body).toEqual({ ref: `refs/heads/${branch}`, sha: "base123" })
+  } finally {
+    gh.stop()
+  }
+})
+
 test("putFile reuses an existing branch and replaces an existing file by its sha", async () => {
   const branch = "kestrel-evidence/pr-7"
   const path = ".kestrel/evidence/task-1/7-1700000000000.png"
