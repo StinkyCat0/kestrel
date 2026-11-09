@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
+  idleTaskIdsFor,
   lastDesktopActivity,
   noteDesktopInput,
   noteViewerLeft,
   shouldStopIdleDesktops,
   shouldStopIdleSession,
   type IdleInputClock,
+  type IdleSessionView,
   type IdleTaskQuery,
 } from "./idle"
 
@@ -49,6 +51,9 @@ describe("desktop activity clock", () => {
     expect(lastDesktopActivity({ lastActivityAt: NOW - 20, lastInputAt: NOW - 10 })).toBe(NOW - 10)
     // A box that has seen no request keeps the desktop's own clock.
     expect(lastDesktopActivity({ lastActivityAt: null, lastInputAt: NOW - 10 })).toBe(NOW - 10)
+    // A desktop whose clock has never moved has no activity at all.
+    expect(lastDesktopActivity({ lastActivityAt: null, lastInputAt: null })).toBeNull()
+    expect(lastDesktopActivity({ lastActivityAt: NOW - 10, lastInputAt: null })).toBe(NOW - 10)
   })
 
   test("a desktop input event moves the session's clock", () => {
@@ -102,5 +107,72 @@ describe("shouldStopIdleSession", () => {
   test("input newer than box activity keeps the desktop up", () => {
     expect(shouldStopIdleSession({ ...session, lastInputAt: NOW - 1 })).toBe(false)
     expect(shouldStopIdleSession({ ...session, lastActivityAt: null, lastInputAt: NOW - 1 })).toBe(false)
+  })
+
+  test("a freshly started desktop that has recorded nothing is not stopped", () => {
+    expect(shouldStopIdleSession({ ...session, lastActivityAt: null, lastInputAt: null })).toBe(false)
+    expect(shouldStopIdleSession({ ...session, state: "starting", lastActivityAt: null, lastInputAt: null })).toBe(false)
+  })
+
+  test("input starts the clock, and the desktop stops once the window passes from it", () => {
+    const fresh = { ...session, lastActivityAt: null, lastInputAt: null }
+    expect(shouldStopIdleSession({ ...fresh, lastInputAt: NOW })).toBe(false)
+    expect(shouldStopIdleSession({ ...fresh, lastInputAt: NOW - IDLE_MS + 1 })).toBe(false)
+    expect(shouldStopIdleSession({ ...fresh, lastInputAt: NOW - IDLE_MS })).toBe(true)
+    expect(shouldStopIdleSession({ ...fresh, lastInputAt: NOW - IDLE_MS - 1 })).toBe(true)
+  })
+
+  test("a viewer or a running app keeps a desktop with no recorded activity up", () => {
+    const fresh = { ...session, lastActivityAt: null, lastInputAt: null }
+    expect(shouldStopIdleSession({ ...fresh, viewers: 1 })).toBe(false)
+    expect(shouldStopIdleSession({ ...fresh, runningApps: 1 })).toBe(false)
+    // Not even the clock running past the window stops it while either is present.
+    const past = { ...fresh, lastInputAt: NOW - IDLE_MS - 1 }
+    expect(shouldStopIdleSession({ ...past, viewers: 1 })).toBe(false)
+    expect(shouldStopIdleSession({ ...past, runningApps: 1 })).toBe(false)
+  })
+})
+
+describe("idleTaskIdsFor", () => {
+  const query: IdleTaskQuery = { now: NOW, runs: 0, recordings: 0, lastActivityAt: null, idleAfterMs: IDLE_MS }
+  const view = (taskId: string, overrides: Partial<IdleSessionView> = {}): IdleSessionView => ({
+    taskId,
+    state: "running",
+    viewers: 0,
+    runningApps: 0,
+    lastInputAt: null,
+    ...overrides,
+  })
+
+  test("a fresh session stays up while one idle past the window stops", () => {
+    expect(idleTaskIdsFor([view("fresh")], query)).toEqual([])
+    expect(idleTaskIdsFor([view("idle", { lastInputAt: NOW - IDLE_MS })], query)).toEqual(["idle"])
+    expect(
+      idleTaskIdsFor(
+        [
+          view("fresh"),
+          view("idle", { lastInputAt: NOW - IDLE_MS - 1 }),
+          view("starting", { state: "starting", lastInputAt: NOW - IDLE_MS }),
+          view("recent", { lastInputAt: NOW - 1 }),
+        ],
+        query,
+      ),
+    ).toEqual(["idle", "starting"])
+  })
+
+  test("a viewed session or one with a running app stays up", () => {
+    const past = NOW - IDLE_MS - 1
+    expect(idleTaskIdsFor([view("viewed", { lastInputAt: past, viewers: 1 })], query)).toEqual([])
+    expect(idleTaskIdsFor([view("app", { lastInputAt: past, runningApps: 1 })], query)).toEqual([])
+    expect(
+      idleTaskIdsFor(
+        [
+          view("viewed", { lastInputAt: past, viewers: 2 }),
+          view("app", { lastInputAt: past, runningApps: 1 }),
+          view("idle", { lastInputAt: past }),
+        ],
+        query,
+      ),
+    ).toEqual(["idle"])
   })
 })

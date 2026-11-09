@@ -23,7 +23,7 @@ import { encodePng, resample, type RgbFrame } from "./frames"
 import { writeOpenboxConfig } from "./theme"
 import { isWsl } from "./platform"
 import { applyDesktopEvent } from "./desktop-state"
-import { noteDesktopInput, noteViewerLeft, shouldStopIdleSession, type IdleTaskQuery } from "./idle"
+import { idleTaskIdsFor, noteDesktopInput, noteViewerLeft, type IdleTaskQuery } from "./idle"
 import { desktopStatus, HEIGHT, WIDTH, type DesktopStatusSource } from "./status"
 import {
   ENCODER_STABLE_MS,
@@ -273,10 +273,11 @@ interface Session {
   /** The long-lived xdotool helper; null until boot starts it and while it is being restarted. */
   input: InputPipe | null
   /**
-   * When this desktop was last driven: its start, an input event, or its last viewer leaving. `ActivityTracker` does not
+   * When this desktop was last driven: an input event, or its last viewer leaving. Null until the first of those, so a
+   * desktop that has recorded no activity since it started is never stopped for idleness. `ActivityTracker` does not
    * see WebRTC input, so the idle stop loop compares against this clock rather than box requests alone.
    */
-  lastInputAt: number
+  lastInputAt: number | null
   inputRestartsLeft: number
   /** The desktop's Opus source (PulseAudio and capture), or null when audio is unavailable. */
   audio: DesktopAudio | null
@@ -1151,7 +1152,7 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
               encoder: null,
               profile: "high",
               input: null,
-              lastInputAt: Date.now(),
+              lastInputAt: null,
               state: "starting",
               error: null,
               config: null,
@@ -1448,22 +1449,17 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
 
       idleTaskIds: (query) =>
         Effect.sync(() =>
-          [...sessions.values()]
-            .filter((s) =>
-              shouldStopIdleSession({
-                now: query.now,
-                state: s.state,
-                runs: query.runs,
-                viewers: s.sinks.size,
-                recordings: query.recordings,
-                // An app the agent started may still be rendering with no viewer watching: leave that desktop alone.
-                runningApps: liveApps(s) ? 1 : 0,
-                lastActivityAt: query.lastActivityAt,
-                lastInputAt: s.lastInputAt,
-                idleAfterMs: query.idleAfterMs,
-              }),
-            )
-            .map((s) => s.taskId),
+          idleTaskIdsFor(
+            [...sessions.values()].map((s) => ({
+              taskId: s.taskId,
+              state: s.state,
+              viewers: s.sinks.size,
+              // An app the agent started may still be rendering with no viewer watching: leave that desktop alone.
+              runningApps: liveApps(s) ? 1 : 0,
+              lastInputAt: s.lastInputAt,
+            })),
+            query,
+          ),
         ),
 
       stopAll: () =>

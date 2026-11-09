@@ -2,8 +2,8 @@ import type { DesktopState } from "@cloudagents/protocol"
 
 /**
  * True when a box's desktops may stop for inactivity: at least one is up, nothing on the box is running, and the last
- * activity is at least `idleAfterMs` old. `idleAfterMs` of 0 disables the stop, and a desktop that has recorded no
- * activity since it started (`lastActivityAt` null) is never stopped.
+ * activity is at least `idleAfterMs` old. `idleAfterMs` of 0 disables the stop, and a box that has recorded no activity
+ * since it started (`lastActivityAt` null) is never stopped.
  */
 export const shouldStopIdleDesktops = (input: {
   readonly now: number
@@ -24,7 +24,7 @@ export const shouldStopIdleDesktops = (input: {
 
 /** The per-desktop clock: the last input event the desktop received, and when its last viewer left. */
 export interface IdleInputClock {
-  lastInputAt: number
+  lastInputAt: number | null
 }
 
 /**
@@ -45,11 +45,19 @@ export const noteViewerLeft = (clock: IdleInputClock, viewers: number, now: numb
   if (viewers === 0) clock.lastInputAt = now
 }
 
-/** When the desktop was last used, from the box's activity and the session's own input clock. */
+/**
+ * When the desktop was last used, from the box's activity and the session's own input clock. A desktop that has
+ * recorded neither since it started has no activity, so it is never stopped for idleness.
+ */
 export const lastDesktopActivity = (input: {
   readonly lastActivityAt: number | null
-  readonly lastInputAt: number
-}): number | null => (input.lastActivityAt === null ? input.lastInputAt : Math.max(input.lastActivityAt, input.lastInputAt))
+  readonly lastInputAt: number | null
+}): number | null => {
+  const { lastActivityAt, lastInputAt } = input
+  if (lastActivityAt === null) return lastInputAt
+  if (lastInputAt === null) return lastActivityAt
+  return Math.max(lastActivityAt, lastInputAt)
+}
 
 /**
  * True when one session may stop for inactivity. On top of `shouldStopIdleDesktops`, the session must be live, have no
@@ -64,7 +72,7 @@ export const shouldStopIdleSession = (input: {
   readonly recordings: number
   readonly runningApps: number
   readonly lastActivityAt: number | null
-  readonly lastInputAt: number
+  readonly lastInputAt: number | null
   readonly idleAfterMs: number
 }): boolean => {
   if (input.state !== "starting" && input.state !== "running") return false
@@ -87,4 +95,35 @@ export interface IdleTaskQuery {
   readonly recordings: number
   readonly lastActivityAt: number | null
   readonly idleAfterMs: number
+}
+
+/** The session fields the idle stop loop judges; the manager projects each live session to one. */
+export interface IdleSessionView {
+  readonly taskId: string
+  readonly state: DesktopState
+  readonly viewers: number
+  readonly runningApps: number
+  readonly lastInputAt: number | null
+}
+
+/** The sessions that may stop for inactivity, by task id: the whole wiring behind `DesktopManager.idleTaskIds`. */
+export const idleTaskIdsFor = (sessions: Iterable<IdleSessionView>, query: IdleTaskQuery): ReadonlyArray<string> => {
+  const ids: string[] = []
+  for (const s of sessions) {
+    if (
+      shouldStopIdleSession({
+        now: query.now,
+        state: s.state,
+        runs: query.runs,
+        viewers: s.viewers,
+        recordings: query.recordings,
+        runningApps: s.runningApps,
+        lastActivityAt: query.lastActivityAt,
+        lastInputAt: s.lastInputAt,
+        idleAfterMs: query.idleAfterMs,
+      })
+    )
+      ids.push(s.taskId)
+  }
+  return ids
 }
