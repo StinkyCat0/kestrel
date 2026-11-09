@@ -1,7 +1,7 @@
 import { availableHarnesses, availableModelHarnesses, boxCapabilities } from "./capabilities"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { join } from "node:path"
-import { Effect, Fiber, Layer, Ref } from "effect"
+import { Cause, Effect, Fiber, Layer, Ref } from "effect"
 import { BOX_USER_HEADER, CREDENTIALS_HEADER, InternalError, Paths } from "@cloudagents/protocol"
 import { ConfigLive, Config, dataDirFromEnv } from "./config"
 import { CliAuth, CliAuthLive } from "./cliauth"
@@ -122,6 +122,9 @@ const closeServer = (server: Server) =>
     server.close(() => resume(Effect.void))
     server.closeAllConnections()
   })
+
+/** How often the idle stop loop looks at the box's desktops. */
+const DESKTOP_IDLE_CHECK_MS = 60_000
 
 const program = Effect.gen(function* () {
   const config = yield* Config
@@ -278,10 +281,45 @@ const program = Effect.gen(function* () {
     }),
   )
 
+  // A desktop nobody uses stops itself: that is what lets a Nest host see `desktops: 0` and suspend the VM. Runs and
+  // viewers are checked per session; a stop that fails is logged and the loop keeps going.
+  const idleStopAfterMs = config.desktopIdleStopAfterMs
+  const idleStopFiber =
+    idleStopAfterMs === 0
+      ? null
+      : yield* Effect.forkDaemon(
+          Effect.gen(function* () {
+            while (true) {
+              yield* Effect.sleep(DESKTOP_IDLE_CHECK_MS)
+              const taskIds = yield* desktop.idleTaskIds({
+                now: Date.now(),
+                runs: yield* harness.activeRunCount(),
+                // The box records nothing yet; the platform's activity report says the same.
+                recordings: 0,
+                lastActivityAt: (yield* tracker.snapshot).lastActivityAt,
+                idleAfterMs: idleStopAfterMs,
+              })
+              if (taskIds.length === 0) continue
+              const active = yield* desktop.activeCount()
+              yield* Effect.logInfo(
+                `stopping ${taskIds.length} of ${active} desktop(s) idle for ${idleStopAfterMs} ms: ${taskIds.join(", ")}`,
+              )
+              for (const taskId of taskIds) {
+                yield* desktop.stop(taskId).pipe(
+                  Effect.catchAllCause((cause) =>
+                    Effect.logWarning(`idle desktop for task ${taskId} not stopped: ${Cause.pretty(cause)}`),
+                  ),
+                )
+              }
+            }
+          }),
+        )
+
   yield* untilSignal
   yield* Effect.logInfo("shutting down")
   boxActivity?.stop()
   if (activity !== null) yield* activity.close
+  if (idleStopFiber !== null) yield* Fiber.interrupt(idleStopFiber)
   yield* Fiber.interrupt(platformFiber)
   const relay = yield* Ref.get(relayFiber)
   if (relay !== null) yield* Fiber.interrupt(relay)

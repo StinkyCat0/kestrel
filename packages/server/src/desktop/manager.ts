@@ -23,6 +23,7 @@ import { encodePng, resample, type RgbFrame } from "./frames"
 import { writeOpenboxConfig } from "./theme"
 import { isWsl } from "./platform"
 import { applyDesktopEvent } from "./desktop-state"
+import { noteDesktopInput, noteViewerLeft, shouldStopIdleSession, type IdleTaskQuery } from "./idle"
 import { desktopStatus, HEIGHT, WIDTH, type DesktopStatusSource } from "./status"
 import {
   ENCODER_STABLE_MS,
@@ -133,6 +134,12 @@ export class DesktopManager extends Context.Tag("cloudagents/DesktopManager")<
     readonly refreshProfile: (taskId: string) => Effect.Effect<void>
     /** Desktops that are starting or running (a failed desktop has already had its processes terminated). */
     readonly activeCount: () => Effect.Effect<number>
+    /**
+     * Live desktops that may stop for inactivity: no viewer, no agent-launched app still running, and no box activity
+     * or desktop input for `idleAfterMs`; a run on the box prevents every stop. A running app is skipped because it
+     * may still be rendering. Callers stop each with `stop`, which is also what lets the Nest host see `desktops: 0`.
+     */
+    readonly idleTaskIds: (query: IdleTaskQuery) => Effect.Effect<ReadonlyArray<string>>
     /** The GPU is available: desktops restart on the GPU renderer. */
     readonly attachHardwareRender: Effect.Effect<void, DesktopError>
     /** The GPU is going away: desktops on the GPU stop now and come back on software rendering in the background. */
@@ -265,6 +272,11 @@ interface Session {
   stderrTail: string
   /** The long-lived xdotool helper; null until boot starts it and while it is being restarted. */
   input: InputPipe | null
+  /**
+   * When this desktop was last driven: its start, an input event, or its last viewer leaving. `ActivityTracker` does not
+   * see WebRTC input, so the idle stop loop compares against this clock rather than box requests alone.
+   */
+  lastInputAt: number
   inputRestartsLeft: number
   /** The desktop's Opus source (PulseAudio and capture), or null when audio is unavailable. */
   audio: DesktopAudio | null
@@ -1139,6 +1151,7 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
               encoder: null,
               profile: "high",
               input: null,
+              lastInputAt: Date.now(),
               state: "starting",
               error: null,
               config: null,
@@ -1220,6 +1233,9 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
           current.awaiting.delete(sink)
           // The last Baseline-only viewer leaving lets the remaining viewers have High back.
           applyProfile(current)
+          // The last viewer leaving ends the viewing session: count it as activity so hours of watching do not make
+          // the desktop look idle the moment they close it.
+          noteViewerLeft(current, current.sinks.size, Date.now())
           scheduleStop(current)
         })
       })
@@ -1336,6 +1352,7 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
       input: (taskId, event) =>
         Effect.gen(function* () {
           const s = yield* requireLive(taskId)
+          noteDesktopInput(s, Date.now())
           const args = xdotoolArgs(event)
           if (args.length === 0) return
           const r = yield* Effect.tryPromise({ try: () => runCommand("xdotool", args, s.display, s.ipc), catch: toErr })
@@ -1353,6 +1370,7 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
       streamInput: (taskId, event) =>
         Effect.gen(function* () {
           const s = yield* requireLive(taskId)
+          noteDesktopInput(s, Date.now())
           const pipe = s.input
           if (pipe === null) return yield* Effect.fail(new DesktopError({ message: "desktop input is not ready" }))
           const lines = yield* Effect.try({ try: () => xdotoolLines(event), catch: toErr })
@@ -1427,6 +1445,26 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
 
       activeCount: () =>
         Effect.sync(() => [...sessions.values()].filter((s) => s.state === "starting" || s.state === "running").length),
+
+      idleTaskIds: (query) =>
+        Effect.sync(() =>
+          [...sessions.values()]
+            .filter((s) =>
+              shouldStopIdleSession({
+                now: query.now,
+                state: s.state,
+                runs: query.runs,
+                viewers: s.sinks.size,
+                recordings: query.recordings,
+                // An app the agent started may still be rendering with no viewer watching: leave that desktop alone.
+                runningApps: liveApps(s) ? 1 : 0,
+                lastActivityAt: query.lastActivityAt,
+                lastInputAt: s.lastInputAt,
+                idleAfterMs: query.idleAfterMs,
+              }),
+            )
+            .map((s) => s.taskId),
+        ),
 
       stopAll: () =>
         Effect.gen(function* () {
