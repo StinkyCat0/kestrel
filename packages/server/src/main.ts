@@ -1,7 +1,7 @@
 import { availableHarnesses, availableModelHarnesses, boxCapabilities } from "./capabilities"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { join } from "node:path"
-import { Cause, Effect, Fiber, Layer, Ref } from "effect"
+import { Effect, Fiber, Layer, Ref } from "effect"
 import { BOX_USER_HEADER, CREDENTIALS_HEADER, InternalError, Paths } from "@cloudagents/protocol"
 import { ConfigLive, Config, dataDirFromEnv } from "./config"
 import { CliAuth, CliAuthLive } from "./cliauth"
@@ -19,6 +19,7 @@ import { CredentialStore, CredentialStoreLive } from "./credentials"
 import { makeModelDiscovery } from "./model-discovery"
 import { GitHubLive } from "./github/api"
 import { DesktopManager, DesktopManagerLive, type DesktopRegion } from "./desktop"
+import { stopIdleDesktops } from "./desktop/idle-stop"
 import { createMcpHandler } from "./mcp"
 import { TaskStatsLive } from "./stats"
 import { makeWebHandler } from "./http/router"
@@ -291,26 +292,19 @@ const program = Effect.gen(function* () {
           Effect.gen(function* () {
             while (true) {
               yield* Effect.sleep(DESKTOP_IDLE_CHECK_MS)
-              const taskIds = yield* desktop.idleTaskIds({
-                now: Date.now(),
-                runs: yield* harness.activeRunCount(),
-                // The box records nothing yet; the platform's activity report says the same.
-                recordings: 0,
-                lastActivityAt: (yield* tracker.snapshot).lastActivityAt,
-                idleAfterMs: idleStopAfterMs,
-              })
-              if (taskIds.length === 0) continue
-              const active = yield* desktop.activeCount()
-              yield* Effect.logInfo(
-                `stopping ${taskIds.length} of ${active} desktop(s) idle for ${idleStopAfterMs} ms: ${taskIds.join(", ")}`,
+              yield* stopIdleDesktops(
+                {
+                  idleTaskIds: desktop.idleTaskIds,
+                  stop: desktop.stop,
+                  activeCount: desktop.activeCount,
+                  runs: harness.activeRunCount,
+                  lastActivityAt: () => tracker.snapshot.pipe(Effect.map((snapshot) => snapshot.lastActivityAt)),
+                  now: Date.now,
+                  logInfo: (message) => Effect.logInfo(message),
+                  logWarning: (message) => Effect.logWarning(message),
+                },
+                idleStopAfterMs,
               )
-              for (const taskId of taskIds) {
-                yield* desktop.stop(taskId).pipe(
-                  Effect.catchAllCause((cause) =>
-                    Effect.logWarning(`idle desktop for task ${taskId} not stopped: ${Cause.pretty(cause)}`),
-                  ),
-                )
-              }
             }
           }),
         )
