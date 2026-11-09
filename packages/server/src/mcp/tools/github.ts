@@ -483,7 +483,8 @@ export const registerGitHubTools = (server: McpServer, ctx: RunContext, deps: Gi
         "Capture the task desktop as a PNG and attach it to the thread's linked GitHub pull request as evidence: the " +
         "image is committed to a dedicated kestrel-evidence branch and a comment shows it inline with the caption. The " +
         "pull request's own branches and diff are never modified. The desktop must be running: call desktop_open " +
-        "first. Defaults to this checkout's pull request; name number for a pull request the thread registered.",
+        "first. Defaults to this checkout's pull request; name number for a pull request in this checkout's repository. " +
+        "The capture is committed to the repository, so on a public repository anything visible on screen becomes public.",
       inputSchema: {
         caption: z.string().min(1).describe("What the screenshot shows; shown as the image's caption"),
         checkout: checkoutArg,
