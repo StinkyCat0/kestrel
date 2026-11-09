@@ -45,6 +45,24 @@ export const noteViewerLeft = (clock: IdleInputClock, viewers: number, now: numb
   if (viewers === 0) clock.lastInputAt = now
 }
 
+/** The session state a viewer departure changes: its live and awaiting sinks, and the idle clock. */
+export interface ViewerDetachState<T> {
+  readonly sinks: Set<T>
+  readonly awaiting: Set<T>
+  lastInputAt: number | null
+}
+
+/**
+ * Ends one viewer's stream on a session: removes it from the live and awaiting sets, then starts the idle window when
+ * the last viewer leaves. The manager's viewer-unsubscribe path calls this, so the order (remove, then note) is pinned
+ * by the tests instead of living only in the manager closure.
+ */
+export const detachViewer = <T>(session: ViewerDetachState<T>, sink: T, now: number): void => {
+  session.sinks.delete(sink)
+  session.awaiting.delete(sink)
+  noteViewerLeft(session, session.sinks.size, now)
+}
+
 /**
  * When the desktop was last used, from the box's activity and the session's own input clock. A desktop that has
  * recorded neither since it started has no activity, so it is never stopped for idleness.

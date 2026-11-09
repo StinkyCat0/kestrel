@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  detachViewer,
   idleTaskIdsFor,
   lastDesktopActivity,
   noteDesktopInput,
@@ -9,6 +10,7 @@ import {
   type IdleInputClock,
   type IdleSessionView,
   type IdleTaskQuery,
+  type ViewerDetachState,
 } from "./idle"
 
 const IDLE_MS = 1_800_000
@@ -174,5 +176,48 @@ describe("idleTaskIdsFor", () => {
         query,
       ),
     ).toEqual(["idle"])
+  })
+})
+
+describe("detachViewer", () => {
+  const viewOf = (session: ViewerDetachState<string>): IdleSessionView => ({
+    taskId: "task",
+    state: "running",
+    viewers: session.sinks.size,
+    runningApps: 0,
+    lastInputAt: session.lastInputAt,
+  })
+  const queryAt = (now: number): IdleTaskQuery => ({
+    now,
+    runs: 0,
+    recordings: 0,
+    lastActivityAt: null,
+    idleAfterMs: IDLE_MS,
+  })
+
+  test("the manager's viewer-leave order starts the idle window at the detach", () => {
+    const session: ViewerDetachState<string> = {
+      sinks: new Set(["viewer"]),
+      awaiting: new Set(["viewer"]),
+      lastInputAt: null,
+    }
+    detachViewer(session, "viewer", NOW)
+    expect(session.sinks.size).toBe(0)
+    expect(session.awaiting.size).toBe(0)
+    expect(session.lastInputAt).toBe(NOW)
+    expect(idleTaskIdsFor([viewOf(session)], queryAt(NOW + IDLE_MS - 1))).toEqual([])
+    expect(idleTaskIdsFor([viewOf(session)], queryAt(NOW + IDLE_MS))).toEqual(["task"])
+  })
+
+  test("a non-last viewer does not move the clock; the last one does", () => {
+    const session: ViewerDetachState<string> = {
+      sinks: new Set(["a", "b"]),
+      awaiting: new Set(["a", "b"]),
+      lastInputAt: NOW - 10,
+    }
+    detachViewer(session, "a", NOW)
+    expect(session.lastInputAt).toBe(NOW - 10)
+    detachViewer(session, "b", NOW + 1)
+    expect(session.lastInputAt).toBe(NOW + 1)
   })
 })

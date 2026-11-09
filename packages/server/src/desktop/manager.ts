@@ -23,7 +23,7 @@ import { encodePng, resample, type RgbFrame } from "./frames"
 import { writeOpenboxConfig } from "./theme"
 import { isWsl } from "./platform"
 import { applyDesktopEvent } from "./desktop-state"
-import { idleTaskIdsFor, noteDesktopInput, noteViewerLeft, type IdleTaskQuery } from "./idle"
+import { detachViewer, idleTaskIdsFor, noteDesktopInput, type IdleTaskQuery } from "./idle"
 import { desktopStatus, HEIGHT, WIDTH, type DesktopStatusSource } from "./status"
 import {
   ENCODER_STABLE_MS,
@@ -1230,13 +1230,11 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
           detachedSinks.add(sink)
           const current = sessions.get(taskId)
           if (current === undefined) return
-          current.sinks.delete(sink)
-          current.awaiting.delete(sink)
+          // Remove the sink and start the idle window on the last viewer's departure. This order is pinned by
+          // idle.test.ts's detachViewer cases, including the clock the idle stop loop reads.
+          detachViewer(current, sink, Date.now())
           // The last Baseline-only viewer leaving lets the remaining viewers have High back.
           applyProfile(current)
-          // The last viewer leaving ends the viewing session: count it as activity so hours of watching do not make
-          // the desktop look idle the moment they close it.
-          noteViewerLeft(current, current.sinks.size, Date.now())
           scheduleStop(current)
         })
       })
