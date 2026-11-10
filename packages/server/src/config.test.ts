@@ -20,6 +20,7 @@ const BOX_VARS = [
   "CLOUDAGENTS_TASK_SWAP_MAX",
   "CLOUDAGENTS_BOX_SWAP_MAX",
   "CLOUDAGENTS_DESKTOP_IDLE_STOP_MS",
+  "CLOUDAGENTS_STREAM_IDLE_CLOSE_MS",
 ] as const
 
 const CONTROL = "https://control.example"
@@ -79,6 +80,23 @@ describe("desktop idle stop", () => {
   test("a negative, fractional or non-numeric value is refused", () => {
     for (const raw of ["-1", "1.5", "soon"]) {
       expect(() => configWith({ CLOUDAGENTS_DESKTOP_IDLE_STOP_MS: raw })).toThrow("CLOUDAGENTS_DESKTOP_IDLE_STOP_MS")
+    }
+  })
+})
+
+describe("desktop stream idle close", () => {
+  test("defaults to 2 minutes", () => {
+    expect(configWith({}).streamIdleCloseAfterMs).toBe(120_000)
+  })
+
+  test("the environment overrides the window and 0 disables it", () => {
+    expect(configWith({ CLOUDAGENTS_STREAM_IDLE_CLOSE_MS: "5000" }).streamIdleCloseAfterMs).toBe(5_000)
+    expect(configWith({ CLOUDAGENTS_STREAM_IDLE_CLOSE_MS: "0" }).streamIdleCloseAfterMs).toBe(0)
+  })
+
+  test("a negative, fractional or non-numeric value is refused", () => {
+    for (const raw of ["-1", "1.5", "soon"]) {
+      expect(() => configWith({ CLOUDAGENTS_STREAM_IDLE_CLOSE_MS: raw })).toThrow("CLOUDAGENTS_STREAM_IDLE_CLOSE_MS")
     }
   })
 })

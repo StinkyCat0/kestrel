@@ -78,9 +78,31 @@ export const lastDesktopActivity = (input: {
 }
 
 /**
- * True when one session may stop for inactivity. On top of `shouldStopIdleDesktops`, the session must be live, have no
- * viewer attached and no agent-launched app still running: a running app may still be rendering even though no viewer
- * is watching, so it is left alone. The caller passes the session's exact viewer count (`sinks.size`).
+ * True when a desktop with a viewer attached has had no agent run, recording or desktop/box activity for
+ * `streamIdleAfterMs`: the stream is idle, so stopping the desktop closes it and lets the host suspend the VM.
+ */
+export const shouldStopIdleStream = (input: {
+  readonly now: number
+  readonly state: DesktopState
+  readonly runs: number
+  readonly viewers: number
+  readonly recordings: number
+  readonly runningApps: number
+  readonly lastActivityAt: number | null
+  readonly lastInputAt: number | null
+  readonly streamIdleAfterMs: number
+}): boolean => {
+  if (input.streamIdleAfterMs <= 0) return false
+  if (input.state !== "starting" && input.state !== "running") return false
+  if (input.runs !== 0 || input.recordings !== 0 || input.runningApps !== 0 || input.viewers === 0) return false
+  const last = lastDesktopActivity(input)
+  return last !== null && input.now - last >= input.streamIdleAfterMs
+}
+
+/**
+ * True when one session may stop for inactivity. A desktop with no viewer stops after the long window; a desktop that
+ * still has a viewer stops after the shorter stream window when neither the agent nor the user has done anything. A
+ * running app may still be rendering, so it is left alone. The caller passes the session's exact viewer count.
  */
 export const shouldStopIdleSession = (input: {
   readonly now: number
@@ -92,18 +114,23 @@ export const shouldStopIdleSession = (input: {
   readonly lastActivityAt: number | null
   readonly lastInputAt: number | null
   readonly idleAfterMs: number
+  readonly streamIdleAfterMs: number
 }): boolean => {
   if (input.state !== "starting" && input.state !== "running") return false
   if (input.runningApps > 0) return false
-  return shouldStopIdleDesktops({
-    now: input.now,
-    runs: input.runs,
-    viewers: input.viewers,
-    recordings: input.recordings,
-    activeDesktops: 1,
-    lastActivityAt: lastDesktopActivity(input),
-    idleAfterMs: input.idleAfterMs,
-  })
+  if (
+    shouldStopIdleDesktops({
+      now: input.now,
+      runs: input.runs,
+      viewers: input.viewers,
+      recordings: input.recordings,
+      activeDesktops: 1,
+      lastActivityAt: lastDesktopActivity(input),
+      idleAfterMs: input.idleAfterMs,
+    })
+  )
+    return true
+  return shouldStopIdleStream(input)
 }
 
 /** What the idle stop loop knows about the box; the manager adds each session's own state. */
@@ -113,6 +140,7 @@ export interface IdleTaskQuery {
   readonly recordings: number
   readonly lastActivityAt: number | null
   readonly idleAfterMs: number
+  readonly streamIdleAfterMs: number
 }
 
 /** The session fields the idle stop loop judges; the manager projects each live session to one. */
@@ -168,6 +196,7 @@ export const idleTaskIdsFor = (sessions: Iterable<IdleSessionView>, query: IdleT
         lastActivityAt: query.lastActivityAt,
         lastInputAt: s.lastInputAt,
         idleAfterMs: query.idleAfterMs,
+        streamIdleAfterMs: query.streamIdleAfterMs,
       })
     )
       ids.push(s.taskId)

@@ -18,7 +18,11 @@ export interface IdleStopDeps {
  * A stop waits for process termination, and a viewer or input may arrive for a later desktop in that window; the
  * re-check keeps the decision and the stop close together without changing the manager's stop.
  */
-export const stopIdleDesktops = (deps: IdleStopDeps, idleAfterMs: number): Effect.Effect<ReadonlyArray<string>> =>
+export const stopIdleDesktops = (
+  deps: IdleStopDeps,
+  idleAfterMs: number,
+  streamIdleAfterMs: number,
+): Effect.Effect<ReadonlyArray<string>> =>
   Effect.gen(function* () {
     const query = (now: number): Effect.Effect<IdleTaskQuery> =>
       Effect.gen(function* () {
@@ -29,12 +33,15 @@ export const stopIdleDesktops = (deps: IdleStopDeps, idleAfterMs: number): Effec
           recordings: 0,
           lastActivityAt: yield* deps.lastActivityAt(),
           idleAfterMs,
+          streamIdleAfterMs,
         }
       })
     const first = yield* deps.idleTaskIds(yield* query(deps.now()))
     if (first.length === 0) return []
     const active = yield* deps.activeCount()
-    yield* deps.logInfo(`stopping ${first.length} of ${active} desktop(s) idle for ${idleAfterMs} ms: ${first.join(", ")}`)
+    yield* deps.logInfo(
+      `stopping ${first.length} of ${active} desktop(s) idle (desktop ${idleAfterMs} ms, stream ${streamIdleAfterMs} ms): ${first.join(", ")}`,
+    )
     const stopped: string[] = []
     for (const taskId of first) {
       // Re-check just before the stop: an earlier stop may have taken long enough for a viewer or input to arrive.

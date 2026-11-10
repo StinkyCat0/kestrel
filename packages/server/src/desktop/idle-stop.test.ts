@@ -28,7 +28,7 @@ describe("stopIdleDesktops", () => {
       [["a", "b"], ["a"], ["a"]],
       (taskId) => Effect.sync(() => void stopped.push(taskId)),
     )
-    const result = await Effect.runPromise(stopIdleDesktops(deps, 60_000))
+    const result = await Effect.runPromise(stopIdleDesktops(deps, 60_000, 120_000))
     expect(stopped).toEqual(["a"])
     expect(result).toEqual(["a"])
   })
@@ -39,7 +39,7 @@ describe("stopIdleDesktops", () => {
       [["a", "b"], ["a", "b"], ["a", "b"]],
       (taskId) => Effect.sync(() => void stopped.push(taskId)),
     )
-    const result = await Effect.runPromise(stopIdleDesktops(deps, 60_000))
+    const result = await Effect.runPromise(stopIdleDesktops(deps, 60_000, 120_000))
     expect(stopped).toEqual(["a", "b"])
     expect(result).toEqual(["a", "b"])
   })
@@ -47,7 +47,7 @@ describe("stopIdleDesktops", () => {
   test("does nothing when the first check finds no idle desktop", async () => {
     const stopped: string[] = []
     const { deps, calls } = makeDeps([[]], (taskId) => Effect.sync(() => void stopped.push(taskId)))
-    const result = await Effect.runPromise(stopIdleDesktops(deps, 60_000))
+    const result = await Effect.runPromise(stopIdleDesktops(deps, 60_000, 120_000))
     expect(result).toEqual([])
     expect(stopped).toEqual([])
     expect(calls()).toBe(1)
@@ -55,7 +55,7 @@ describe("stopIdleDesktops", () => {
 
   test("logs a failed stop and does not count it as stopped", async () => {
     const { deps, warnings } = makeDeps([["a"], ["a"]], () => Effect.fail(new Error("boom")))
-    const result = await Effect.runPromise(stopIdleDesktops(deps, 60_000))
+    const result = await Effect.runPromise(stopIdleDesktops(deps, 60_000, 120_000))
     expect(result).toEqual([])
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain("not stopped")

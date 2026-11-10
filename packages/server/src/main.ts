@@ -304,6 +304,7 @@ const program = Effect.gen(function* () {
                   logWarning: (message) => Effect.logWarning(message),
                 },
                 idleStopAfterMs,
+                config.streamIdleCloseAfterMs,
               )
             }
           }),

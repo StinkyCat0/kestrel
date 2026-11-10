@@ -16,6 +16,7 @@ import {
 } from "./idle"
 
 const IDLE_MS = 1_800_000
+const STREAM_MS = 120_000
 const NOW = 10_000_000
 
 const quiet = {
@@ -75,7 +76,7 @@ describe("desktop activity clock", () => {
     // The viewer watched for hours without input, then left; the desktop is active again from that moment.
     noteViewerLeft(session, 0, NOW)
     expect(session.lastInputAt).toBe(NOW)
-    const query: IdleTaskQuery = { now: NOW, runs: 0, recordings: 0, lastActivityAt: null, idleAfterMs: IDLE_MS }
+    const query: IdleTaskQuery = { now: NOW, runs: 0, recordings: 0, lastActivityAt: null, idleAfterMs: IDLE_MS, streamIdleAfterMs: 0 }
     expect(
       shouldStopIdleSession({ ...query, state: "running", viewers: 0, runningApps: 0, lastInputAt: session.lastInputAt }),
     ).toBe(false)
@@ -93,6 +94,7 @@ describe("shouldStopIdleSession", () => {
     lastActivityAt: NOW - IDLE_MS,
     lastInputAt: NOW - IDLE_MS,
     idleAfterMs: IDLE_MS,
+    streamIdleAfterMs: 0,
   }
 
   test("a running desktop idle past the window with no viewer or app stops", () => {
@@ -137,8 +139,40 @@ describe("shouldStopIdleSession", () => {
   })
 })
 
+describe("stream idle close", () => {
+  const viewed = {
+    now: NOW,
+    state: "running" as const,
+    runs: 0,
+    viewers: 1,
+    recordings: 0,
+    runningApps: 0,
+    lastActivityAt: NOW - STREAM_MS,
+    lastInputAt: NOW - STREAM_MS,
+    idleAfterMs: IDLE_MS,
+    streamIdleAfterMs: STREAM_MS,
+  }
+
+  test("a viewed desktop with no run or input closes at the stream window", () => {
+    expect(shouldStopIdleSession({ ...viewed, lastActivityAt: NOW - STREAM_MS + 1 })).toBe(false)
+    expect(shouldStopIdleSession(viewed)).toBe(true)
+  })
+
+  test("recent input, a run, a recording or a running app keeps the stream open", () => {
+    expect(shouldStopIdleSession({ ...viewed, lastInputAt: NOW - 1 })).toBe(false)
+    expect(shouldStopIdleSession({ ...viewed, runs: 1 })).toBe(false)
+    expect(shouldStopIdleSession({ ...viewed, recordings: 1 })).toBe(false)
+    expect(shouldStopIdleSession({ ...viewed, runningApps: 1 })).toBe(false)
+  })
+
+  test("no viewer or a disabled stream window leaves the long desktop window in charge", () => {
+    expect(shouldStopIdleSession({ ...viewed, viewers: 0 })).toBe(false)
+    expect(shouldStopIdleSession({ ...viewed, streamIdleAfterMs: 0 })).toBe(false)
+  })
+})
+
 describe("idleTaskIdsFor", () => {
-  const query: IdleTaskQuery = { now: NOW, runs: 0, recordings: 0, lastActivityAt: null, idleAfterMs: IDLE_MS }
+  const query: IdleTaskQuery = { now: NOW, runs: 0, recordings: 0, lastActivityAt: null, idleAfterMs: IDLE_MS, streamIdleAfterMs: 0 }
   const view = (taskId: string, overrides: Partial<IdleSessionView> = {}): IdleSessionView => ({
     taskId,
     state: "running",
@@ -179,6 +213,15 @@ describe("idleTaskIdsFor", () => {
       ),
     ).toEqual(["idle"])
   })
+
+  test("a viewed session closes after the stream window", () => {
+    const streamQuery: IdleTaskQuery = {
+      ...query,
+      streamIdleAfterMs: STREAM_MS,
+      lastActivityAt: NOW - STREAM_MS,
+    }
+    expect(idleTaskIdsFor([view("viewed", { viewers: 1, lastInputAt: NOW - STREAM_MS })], streamQuery)).toEqual(["viewed"])
+  })
 })
 
 describe("detachViewer", () => {
@@ -195,6 +238,7 @@ describe("detachViewer", () => {
     recordings: 0,
     lastActivityAt: null,
     idleAfterMs: IDLE_MS,
+    streamIdleAfterMs: 0,
   })
 
   test("the manager's viewer-leave order starts the idle window at the detach", () => {
@@ -231,6 +275,7 @@ describe("idleSessionView", () => {
     recordings: 0,
     lastActivityAt: NOW - IDLE_MS - 1,
     idleAfterMs: IDLE_MS,
+    streamIdleAfterMs: 0,
   })
   const session = (
     overrides: { sinks?: Set<string>; apps?: Array<{ exit: unknown | null }>; lastInputAt?: number | null } = {},
