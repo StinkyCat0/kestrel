@@ -181,7 +181,7 @@ describe("estimateNestCost", () => {
 
   test("adds the GPU rate only for a shape that allows one", () => {
     expect(estimateNestCost({ ...limits, gpu: "on-demand" }, DEFAULT_NEST_RATES).hourlyRunning).toBeCloseTo(1.528, 6)
-    expect(estimateNestCost({ ...limits, gpu: "static" }, DEFAULT_NEST_RATES).hourlyRunning).toBeCloseTo(0.328, 6)
+    expect(estimateNestCost({ ...limits, gpu: "none" }, DEFAULT_NEST_RATES).hourlyRunning).toBeCloseTo(0.328, 6)
   })
 
   test("scales with CPU, memory and volume", () => {
