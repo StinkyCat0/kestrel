@@ -9,7 +9,7 @@ import { CredentialBroker } from "../broker"
 import { Config, type ServerConfig } from "../config"
 import { CredentialStore } from "../credentials"
 import { DesktopManager } from "../desktop"
-import { GitHub, type GitHubShape, type PullRequestStatus } from "../github/api"
+import { GitHub, GitHubError, type GitHubShape, type PullRequestStatus } from "../github/api"
 import { EventHubLive } from "./events"
 import { AgentHarness } from "./harness"
 import { CoreLive, CoreService } from "./service"
@@ -167,7 +167,7 @@ test("the service refuses a closed pull request and writes neither the evidence 
   const closed = await withCore(
     {
       getPullRequestStatus: () => Effect.succeed(statusOf({ state: "closed" })),
-      putFile: () => Effect.sync(() => (writes.push("putFile"), { path: "p", branch: "b", htmlUrl: "https://github.com/x" })),
+      putFile: () => Effect.sync(() => (writes.push("putFile"), { path: "p", branch: "b", htmlUrl: "https://github.com/x", sha: "blob-sha" })),
       createComment: () => Effect.sync(() => (writes.push("createComment"), { id: 1, url: "https://github.com/c/1" })),
     },
     (core) =>
@@ -191,7 +191,7 @@ test("the service commits the capture to the evidence branch and comments it on 
       getPullRequestStatus: () => Effect.succeed(statusOf({ state: "open", baseRef: "main" })),
       putFile: (_token, _repo, input) => {
         putFiles.push(input)
-        return Effect.succeed({ path: input.path, branch: input.branch, htmlUrl: `https://github.com/${REPO}/blob/${input.branch}/${input.path}` })
+        return Effect.succeed({ path: input.path, branch: input.branch, htmlUrl: `https://github.com/${REPO}/blob/${input.branch}/${input.path}`, sha: "blob-sha" })
       },
       createComment: (_token, _repo, number, body) => {
         comments.push(body)
@@ -213,4 +213,33 @@ test("the service commits the capture to the evidence branch and comments it on 
   expect(comments[0]).toContain("?raw=true)")
   expect(comments[0]).toContain("task `t1`")
   expect(attached).toEqual({ commentUrl: "https://github.com/acme/widget/pull/7#issuecomment-1", imageUrl: expect.stringContaining(".kestrel/evidence/t1/7-") })
+})
+
+test("a failed comment deletes the uploaded evidence and returns the original error", async () => {
+  const deleted: Array<{ path: string; branch: string; sha: string; message: string }> = []
+  const failed = await withCore(
+    {
+      getPullRequestStatus: () => Effect.succeed(statusOf({ state: "open", baseRef: "main" })),
+      putFile: (_token, _repo, input) =>
+        Effect.succeed({ path: input.path, branch: input.branch, htmlUrl: "https://github.com/x", sha: "blob-sha" }),
+      createComment: () => Effect.fail(new GitHubError({ message: "comment failed" })),
+      deleteFile: (_token, _repo, input) => Effect.sync(() => void deleted.push(input)),
+    },
+    (core) =>
+      Effect.either(
+        core.attachEvidenceToPullRequest("t1", {
+          caption: "Settings",
+          bytes: new Uint8Array([1]),
+          mimeType: "image/png",
+          number: 7,
+        }),
+      ),
+  )
+  expect(Either.isLeft(failed)).toBe(true)
+  expect(deleted).toHaveLength(1)
+  expect(deleted[0]).toMatchObject({
+    branch: "kestrel-evidence",
+    sha: "blob-sha",
+    message: expect.stringContaining("Remove unlinked evidence"),
+  })
 })

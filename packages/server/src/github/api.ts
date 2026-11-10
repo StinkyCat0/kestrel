@@ -316,7 +316,13 @@ export interface GitHubShape {
       readonly message: string
       readonly createFrom?: string
     },
-  ) => Effect.Effect<{ readonly path: string; readonly branch: string; readonly htmlUrl: string }, GitHubError>
+  ) => Effect.Effect<{ readonly path: string; readonly branch: string; readonly htmlUrl: string; readonly sha: string }, GitHubError>
+  /** Deletes a file from a branch; used to remove an evidence upload whose comment could not be posted. */
+  readonly deleteFile: (
+    token: string,
+    repo: RepoSlug,
+    input: { readonly path: string; readonly branch: string; readonly sha: string; readonly message: string },
+  ) => Effect.Effect<void, GitHubError>
   /** Replies in the thread of a review comment on the pull request's diff. */
   readonly replyToReviewComment: (token: string, repo: RepoSlug, number: number, commentId: number, body: string) => Effect.Effect<PostedComment, GitHubError>
   readonly editComment: (token: string, repo: RepoSlug, kind: CommentKind, commentId: number, body: string) => Effect.Effect<PostedComment, GitHubError>
@@ -459,7 +465,9 @@ const GitRefBody = Schema.Struct({ object: Schema.Struct({ sha: Schema.String })
 /** A file read through the Contents API; the other fields (size, encoding, content) are not needed to replace it. */
 const FileContentsBody = Schema.Struct({ sha: Schema.String })
 
-const FilePutBody = Schema.Struct({ content: Schema.Struct({ path: Schema.String, html_url: Schema.String }) })
+const FilePutBody = Schema.Struct({
+  content: Schema.Struct({ path: Schema.String, html_url: Schema.String, sha: Schema.String }),
+})
 
 const PullCommitsBody = Schema.Array(
   Schema.Struct({
@@ -964,23 +972,55 @@ export const GitHubLive = Layer.effect(
         )
       })
 
+    /** The current blob sha at `path` on `branch`, or undefined when the file is new. */
+    const fileSha = (token: string, repo: RepoSlug, path: string, branch: string) =>
+      call(token, repo, "GET", `${repoPath(repo)}/contents/${path}?ref=${encodeURIComponent(branch)}`).pipe(
+        Effect.flatMap(decode(FileContentsBody, "file contents")),
+        Effect.map((file): string | undefined => file.sha),
+        Effect.catchIf((e) => e.status === 404, () => Effect.succeed(undefined)),
+      )
+
     const putFile: GitHubShape["putFile"] = (token, repo, input) =>
       Effect.gen(function* () {
         yield* ensureBranch(token, repo, input.branch, input.createFrom)
         const path = encodePath(input.path)
-        const existing = yield* call(token, repo, "GET", `${repoPath(repo)}/contents/${path}?ref=${encodeURIComponent(input.branch)}`).pipe(
-          Effect.flatMap(decode(FileContentsBody, "file contents")),
-          Effect.map((file): string | undefined => file.sha),
-          Effect.catchIf((e) => e.status === 404, () => Effect.succeed(undefined)),
-        )
-        const written = yield* call(token, repo, "PUT", `${repoPath(repo)}/contents/${path}`, {
-          message: input.message,
-          content: Buffer.from(input.bytes).toString("base64"),
+        type FilePut = Schema.Schema.Type<typeof FilePutBody>
+        /**
+         * Writes the file, retrying a stale branch update (409) or content conflict (422) after re-reading the current
+         * sha. Two captures on the shared evidence branch can otherwise race and reject each other.
+         */
+        const write = (sha: string | undefined, attempt: number): Effect.Effect<FilePut, GitHubError> =>
+          call(token, repo, "PUT", `${repoPath(repo)}/contents/${path}`, {
+            message: input.message,
+            content: Buffer.from(input.bytes).toString("base64"),
+            branch: input.branch,
+            ...(sha === undefined ? {} : { sha }),
+          }).pipe(
+            Effect.flatMap(decode(FilePutBody, "file contents")),
+            Effect.catchIf(
+              (e) => (e.status === 409 || e.status === 422) && attempt < 2,
+              () =>
+                Effect.gen(function* () {
+                  yield* ensureBranch(token, repo, input.branch, input.createFrom)
+                  return yield* write(yield* fileSha(token, repo, path, input.branch), attempt + 1)
+                }),
+            ),
+          )
+        const written = yield* write(yield* fileSha(token, repo, path, input.branch), 0)
+        return {
+          path: written.content.path,
           branch: input.branch,
-          ...(existing === undefined ? {} : { sha: existing }),
-        }).pipe(Effect.flatMap(decode(FilePutBody, "file contents")))
-        return { path: written.content.path, branch: input.branch, htmlUrl: written.content.html_url }
+          htmlUrl: written.content.html_url,
+          sha: written.content.sha,
+        }
       })
+
+    const deleteFile: GitHubShape["deleteFile"] = (token, repo, input) =>
+      call(token, repo, "DELETE", `${repoPath(repo)}/contents/${encodePath(input.path)}`, {
+        message: input.message,
+        branch: input.branch,
+        sha: input.sha,
+      }).pipe(Effect.asVoid)
 
     const service: GitHubShape = {
       commitIdentity,
@@ -1093,6 +1133,7 @@ export const GitHubLive = Layer.effect(
         ),
       createComment: (token, repo, number, body) => postComment(token, repo, `${repoPath(repo)}/issues/${number}/comments`, body),
       putFile,
+      deleteFile,
       replyToReviewComment: (token, repo, number, commentId, body) =>
         postComment(token, repo, `${repoPath(repo)}/pulls/${number}/comments/${commentId}/replies`, body),
       editComment: (token, repo, kind, commentId, body) =>

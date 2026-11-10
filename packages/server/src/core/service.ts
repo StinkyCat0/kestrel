@@ -3419,7 +3419,20 @@ export const CoreLive = Layer.effect(
               number,
               evidenceCommentBody({ caption: input.caption, htmlUrl: file.htmlUrl, taskId, capturedAt: new Date(now).toISOString() }),
             )
-            .pipe(Effect.mapError(fromGitHub))
+            .pipe(
+              // The upload has no link if the comment fails; remove it rather than leave an orphan on the shared branch.
+              Effect.catchAll((error) =>
+                github
+                  .deleteFile(token, slug, {
+                    path: file.path,
+                    branch: file.branch,
+                    sha: file.sha,
+                    message: `Remove unlinked evidence for pull request #${number}`,
+                  })
+                  .pipe(Effect.catchAll(() => Effect.void), Effect.zipRight(Effect.fail(error))),
+              ),
+              Effect.mapError(fromGitHub),
+            )
           return { commentUrl: comment.url, imageUrl: file.htmlUrl }
         }),
 
