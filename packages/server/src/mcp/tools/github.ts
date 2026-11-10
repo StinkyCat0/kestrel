@@ -485,7 +485,9 @@ export const registerGitHubTools = (server: McpServer, ctx: RunContext, deps: Gi
         "pull request's own branches and diff are never modified. The desktop must be running: call desktop_open " +
         "first. Defaults to this checkout's pull request; name number for a pull request in this checkout's repository. " +
         "The capture is committed to the repository, so on a public repository anything visible on screen becomes public. " +
-        "The shared kestrel-evidence branch is kept after the pull request closes; delete it to remove the captures.",
+        "The shared kestrel-evidence branch is kept after the pull request closes. Deleting it removes the image from " +
+        "the branch and the comment's link; the commit and blob remain in the repository's object store until garbage " +
+        "collection and may remain reachable by commit SHA or from forks.",
       inputSchema: {
         caption: z.string().min(1).describe("What the screenshot shows; shown as the image's caption"),
         checkout: checkoutArg,
