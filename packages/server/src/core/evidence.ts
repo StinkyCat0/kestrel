@@ -7,8 +7,8 @@
 /** A count that becomes a path segment; a caller's impossible value still yields a usable name. */
 const positiveInt = (value: number): string => (Number.isFinite(value) ? String(Math.max(0, Math.trunc(value))) : "0")
 
-/** Branch that holds every pull request's evidence files, separate from the code being reviewed. */
-export const evidenceBranch = (number: number): string => `kestrel-evidence/pr-${positiveInt(number)}`
+/** One shared branch holds every pull request's evidence files, separate from the code being reviewed. */
+export const evidenceBranch = (): string => "kestrel-evidence"
 
 /** A task id is a path segment: keep it to characters that cannot escape the directory or confuse GitHub. */
 const sanitizeSegment = (value: string): string => {

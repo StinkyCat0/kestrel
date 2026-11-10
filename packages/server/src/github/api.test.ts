@@ -651,14 +651,14 @@ test("gh api writes only the allowlisted endpoints, on the thread's checkouts", 
 })
 
 test("putFile creates the evidence branch from the named base, then writes the image", async () => {
-  const branch = "kestrel-evidence/pr-7"
+  const branch = "kestrel-evidence"
   const path = ".kestrel/evidence/task-1/7-1700000000000.png"
   const repoPrefix = "/repos/jarenm1/kestrel"
   const gh = fakeGitHub(({ method, path: requestPath }) => {
     if (method === "GET" && requestPath === `${repoPrefix}/git/ref/heads/${branch}`) return { status: 404 }
     if (method === "GET" && requestPath === `${repoPrefix}/git/ref/heads/main`) return { json: { object: { sha: "base123" } } }
     if (method === "POST" && requestPath === `${repoPrefix}/git/refs`) return { status: 201, json: { ref: `refs/heads/${branch}`, object: { sha: "base123" } } }
-    if (method === "GET" && requestPath === `${repoPrefix}/contents/${path}?ref=kestrel-evidence%2Fpr-7`) return { status: 404 }
+    if (method === "GET" && requestPath === `${repoPrefix}/contents/${path}?ref=kestrel-evidence`) return { status: 404 }
     if (method === "PUT" && requestPath === `${repoPrefix}/contents/${path}`) {
       return { status: 201, json: { content: { path, html_url: `https://github.com/jarenm1/kestrel/blob/${branch}/${path}` } } }
     }
@@ -681,7 +681,7 @@ test("putFile creates the evidence branch from the named base, then writes the i
       { method: "GET", path: `${repoPrefix}/git/ref/heads/${branch}`, body: undefined },
       { method: "GET", path: `${repoPrefix}/git/ref/heads/main`, body: undefined },
       { method: "POST", path: `${repoPrefix}/git/refs`, body: { ref: `refs/heads/${branch}`, sha: "base123" } },
-      { method: "GET", path: `${repoPrefix}/contents/${path}?ref=kestrel-evidence%2Fpr-7`, body: undefined },
+      { method: "GET", path: `${repoPrefix}/contents/${path}?ref=kestrel-evidence`, body: undefined },
       {
         method: "PUT",
         path: `${repoPrefix}/contents/${path}`,
@@ -694,17 +694,18 @@ test("putFile creates the evidence branch from the named base, then writes the i
 })
 
 test("putFile creates the branch when the ref lookup returns a prefix-match array", async () => {
-  const branch = "kestrel-evidence/pr-7"
+  const branch = "kestrel-evidence"
   const path = ".kestrel/evidence/task-1/7-1700000000000.png"
   const repoPrefix = "/repos/jarenm1/kestrel"
   const gh = fakeGitHub(({ method, path: requestPath }) => {
-    // GitHub answers a prefix-only lookup with a 200 array, not a 404: pr-70 exists, pr-7 does not.
+    // GitHub answers a prefix-only lookup with a 200 array, not a 404: kestrel-evidence-old exists,
+    // kestrel-evidence does not.
     if (method === "GET" && requestPath === `${repoPrefix}/git/ref/heads/${branch}`) {
-      return { json: [{ ref: "refs/heads/kestrel-evidence/pr-70", object: { sha: "other" } }] }
+      return { json: [{ ref: "refs/heads/kestrel-evidence-old", object: { sha: "other" } }] }
     }
     if (method === "GET" && requestPath === `${repoPrefix}/git/ref/heads/main`) return { json: { object: { sha: "base123" } } }
     if (method === "POST" && requestPath === `${repoPrefix}/git/refs`) return { status: 201, json: { ref: `refs/heads/${branch}`, object: { sha: "base123" } } }
-    if (method === "GET" && requestPath === `${repoPrefix}/contents/${path}?ref=kestrel-evidence%2Fpr-7`) return { status: 404 }
+    if (method === "GET" && requestPath === `${repoPrefix}/contents/${path}?ref=kestrel-evidence`) return { status: 404 }
     if (method === "PUT" && requestPath === `${repoPrefix}/contents/${path}`) {
       return { status: 201, json: { content: { path, html_url: `https://github.com/jarenm1/kestrel/blob/${branch}/${path}` } } }
     }
@@ -721,7 +722,7 @@ test("putFile creates the branch when the ref lookup returns a prefix-match arra
       `GET ${repoPrefix}/git/ref/heads/${branch}`,
       `GET ${repoPrefix}/git/ref/heads/main`,
       `POST ${repoPrefix}/git/refs`,
-      `GET ${repoPrefix}/contents/${path}?ref=kestrel-evidence%2Fpr-7`,
+      `GET ${repoPrefix}/contents/${path}?ref=kestrel-evidence`,
       `PUT ${repoPrefix}/contents/${path}`,
     ])
     expect(gh.requests.find(({ method }) => method === "POST")?.body).toEqual({ ref: `refs/heads/${branch}`, sha: "base123" })
@@ -731,12 +732,12 @@ test("putFile creates the branch when the ref lookup returns a prefix-match arra
 })
 
 test("putFile reuses an existing branch and replaces an existing file by its sha", async () => {
-  const branch = "kestrel-evidence/pr-7"
+  const branch = "kestrel-evidence"
   const path = ".kestrel/evidence/task-1/7-1700000000000.png"
   const repoPrefix = "/repos/jarenm1/kestrel"
   const gh = fakeGitHub(({ method, path: requestPath }) => {
     if (method === "GET" && requestPath === `${repoPrefix}/git/ref/heads/${branch}`) return { json: { object: { sha: "base123" } } }
-    if (method === "GET" && requestPath === `${repoPrefix}/contents/${path}?ref=kestrel-evidence%2Fpr-7`) return { json: { sha: "previous" } }
+    if (method === "GET" && requestPath === `${repoPrefix}/contents/${path}?ref=kestrel-evidence`) return { json: { sha: "previous" } }
     if (method === "PUT" && requestPath === `${repoPrefix}/contents/${path}`) {
       return { status: 200, json: { content: { path, html_url: `https://github.com/jarenm1/kestrel/blob/${branch}/${path}` } } }
     }
@@ -750,7 +751,7 @@ test("putFile reuses an existing branch and replaces an existing file by its sha
     )
     expect(gh.requests.map(({ method, path: requestPath }) => `${method} ${requestPath}`)).toEqual([
       `GET ${repoPrefix}/git/ref/heads/${branch}`,
-      `GET ${repoPrefix}/contents/${path}?ref=kestrel-evidence%2Fpr-7`,
+      `GET ${repoPrefix}/contents/${path}?ref=kestrel-evidence`,
       `PUT ${repoPrefix}/contents/${path}`,
     ])
     expect(gh.requests.at(-1)?.body).toEqual({ message: "again", content: Buffer.from(bytes).toString("base64"), branch, sha: "previous" })
@@ -760,12 +761,12 @@ test("putFile reuses an existing branch and replaces an existing file by its sha
 })
 
 test("putFile surfaces GitHub's failure and never puts the token in the error", async () => {
-  const branch = "kestrel-evidence/pr-7"
+  const branch = "kestrel-evidence"
   const path = ".kestrel/evidence/task-1/7-1700000000000.png"
   const repoPrefix = "/repos/jarenm1/kestrel"
   const gh = fakeGitHub(({ method, path: requestPath }) => {
     if (method === "GET" && requestPath === `${repoPrefix}/git/ref/heads/${branch}`) return { json: { object: { sha: "base123" } } }
-    if (method === "GET" && requestPath === `${repoPrefix}/contents/${path}?ref=kestrel-evidence%2Fpr-7`) return { status: 404 }
+    if (method === "GET" && requestPath === `${repoPrefix}/contents/${path}?ref=kestrel-evidence`) return { status: 404 }
     if (method === "PUT" && requestPath === `${repoPrefix}/contents/${path}`) return { status: 500, json: { message: "server is down" } }
     return { status: 500 }
   })

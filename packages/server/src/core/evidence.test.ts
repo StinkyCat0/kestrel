@@ -17,9 +17,9 @@ import { StateLive, StateStore } from "./state"
 import { WorkspaceService } from "./workspace"
 import { evidenceBranch, evidenceCommentBody, evidencePath } from "./evidence"
 
-test("evidence branch names one pull request and no code branch", () => {
-  expect(evidenceBranch(7)).toBe("kestrel-evidence/pr-7")
-  expect(evidenceBranch(7)).not.toBe("main")
+test("evidence uses one shared branch and no code branch", () => {
+  expect(evidenceBranch()).toBe("kestrel-evidence")
+  expect(evidenceBranch()).not.toBe("main")
 })
 
 test("evidence paths carry a sanitized task id and a unique capture timestamp", () => {
@@ -35,12 +35,12 @@ test("evidence paths carry a sanitized task id and a unique capture timestamp", 
 test("the evidence comment shows the blob raw with the caption and provenance", () => {
   const body = evidenceCommentBody({
     caption: "Settings dialog\nopen",
-    htmlUrl: "https://github.com/jarenm1/kestrel/blob/kestrel-evidence/pr-7/.kestrel/evidence/task-1/7-1.png",
+    htmlUrl: "https://github.com/jarenm1/kestrel/blob/kestrel-evidence/.kestrel/evidence/task-1/7-1.png",
     taskId: "task-1",
     capturedAt: "2026-11-09T00:00:00.000Z",
   })
   expect(body).toContain(
-    "![Settings dialog open](https://github.com/jarenm1/kestrel/blob/kestrel-evidence/pr-7/.kestrel/evidence/task-1/7-1.png?raw=true)",
+    "![Settings dialog open](https://github.com/jarenm1/kestrel/blob/kestrel-evidence/.kestrel/evidence/task-1/7-1.png?raw=true)",
   )
   expect(body).toContain("task `task-1`")
   expect(body).toContain("captured 2026-11-09T00:00:00.000Z")
@@ -202,14 +202,14 @@ test("the service commits the capture to the evidence branch and comments it on 
   )
   expect(putFiles).toHaveLength(1)
   const input = putFiles[0] as { path: string; branch: string; bytes: Uint8Array; message: string; createFrom?: string }
-  expect(input.branch).toBe(evidenceBranch(7))
+  expect(input.branch).toBe(evidenceBranch())
   expect(input.branch).not.toBe("topic")
   expect(input.createFrom).toBe("main")
   expect(input.path.startsWith(`.kestrel/evidence/t1/7-`)).toBe(true)
   expect(input.path.endsWith(".png")).toBe(true)
   expect(input.bytes).toBe(bytes)
   expect(comments).toHaveLength(1)
-  expect(comments[0]).toContain("![Settings dialog](https://github.com/acme/widget/blob/kestrel-evidence/pr-7/")
+  expect(comments[0]).toContain("![Settings dialog](https://github.com/acme/widget/blob/kestrel-evidence/")
   expect(comments[0]).toContain("?raw=true)")
   expect(comments[0]).toContain("task `t1`")
   expect(attached).toEqual({ commentUrl: "https://github.com/acme/widget/pull/7#issuecomment-1", imageUrl: expect.stringContaining(".kestrel/evidence/t1/7-") })

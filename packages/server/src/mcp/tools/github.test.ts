@@ -143,7 +143,7 @@ test("evidence_attach_to_pr captures the desktop and posts it to the linked pull
           calls.push([taskId, input])
           return {
             commentUrl: "https://github.com/jarenm1/kestrel/pull/7#issuecomment-90",
-            imageUrl: "https://github.com/jarenm1/kestrel/blob/kestrel-evidence/pr-7/x.png",
+            imageUrl: "https://github.com/jarenm1/kestrel/blob/kestrel-evidence/x.png",
           }
         }),
     },

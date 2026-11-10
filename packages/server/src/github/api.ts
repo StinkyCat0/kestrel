@@ -930,8 +930,8 @@ export const GitHubLive = Layer.effect(
 
     /**
      * True only for an exact branch ref. GitHub answers `GET git/ref/heads/<branch>` with a 200 array of refs when no
-     * exact match exists but another branch shares the prefix (`kestrel-evidence/pr-1` vs `…/pr-12`), so a plain 2xx
-     * must not count as the branch existing.
+     * exact match exists but another branch shares the prefix (`kestrel-evidence` vs `kestrel-evidence-old`), so a
+     * plain 2xx must not count as the branch existing.
      */
     const hasBranch = (token: string, repo: RepoSlug, branch: string) => {
       const path = `${repoPath(repo)}/git/ref/heads/${encodePath(branch)}`

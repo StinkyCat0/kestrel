@@ -3406,7 +3406,7 @@ export const CoreLive = Layer.effect(
           const file = yield* github
             .putFile(token, slug, {
               path: evidencePath(taskId, number, now),
-              branch: evidenceBranch(number),
+              branch: evidenceBranch(),
               bytes: input.bytes,
               message: `Desktop evidence for pull request #${number}`,
               createFrom: status.baseRef,
