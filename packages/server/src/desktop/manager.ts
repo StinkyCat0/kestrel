@@ -99,6 +99,8 @@ export interface DesktopStartOptions {
    * MIT-SHM too.
    */
   readonly ipcNamespace: Effect.Effect<IpcNamespace, DesktopError>
+  /** The idle clock a restart carries over; null for a fresh desktop. */
+  readonly lastInputAt?: number | null
 }
 
 export class DesktopManager extends Context.Tag("cloudagents/DesktopManager")<
@@ -222,6 +224,8 @@ interface Relaunch {
   readonly terminal: DesktopStartOptions["terminal"]
   readonly ipcNamespace: DesktopStartOptions["ipcNamespace"]
   readonly sinks: ReadonlyArray<DesktopSink>
+  /** The input clock, so a restart does not make an actively driven desktop look idle. */
+  readonly lastInputAt: number | null
 }
 
 interface Session {
@@ -1152,7 +1156,7 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
               encoder: null,
               profile: "high",
               input: null,
-              lastInputAt: null,
+              lastInputAt: opts.lastInputAt ?? null,
               state: "starting",
               error: null,
               config: null,
@@ -1243,7 +1247,7 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
     const snapshotAndStop = (taskId: string) =>
       Effect.gen(function* () {
         const s = yield* lookup(taskId)
-        const snapshot: Relaunch = { taskId, terminal: s.terminal, ipcNamespace: s.ipcNamespace, sinks: [...s.sinks] }
+        const snapshot: Relaunch = { taskId, terminal: s.terminal, ipcNamespace: s.ipcNamespace, sinks: [...s.sinks], lastInputAt: s.lastInputAt }
         yield* stopTask(taskId)
         return snapshot
       })
@@ -1251,7 +1255,11 @@ export const DesktopManagerLive: Layer.Layer<DesktopManager> = Layer.effect(
     // Starts the desktop again on the current renderer and attaches the viewers that are still watching it.
     const relaunch = (snapshot: Relaunch) =>
       Effect.gen(function* () {
-        yield* startDesktop(snapshot.taskId, { terminal: snapshot.terminal, ipcNamespace: snapshot.ipcNamespace })
+        yield* startDesktop(snapshot.taskId, {
+          terminal: snapshot.terminal,
+          ipcNamespace: snapshot.ipcNamespace,
+          lastInputAt: snapshot.lastInputAt,
+        })
         for (const sink of snapshot.sinks) {
           if (detachedSinks.has(sink)) continue
           yield* attachSink(snapshot.taskId, sink).pipe(

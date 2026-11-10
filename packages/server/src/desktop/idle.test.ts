@@ -304,4 +304,15 @@ describe("idleSessionView", () => {
     expect(hasRunningApp(exited.apps)).toBe(false)
     expect(idleTaskIdsFor([idleSessionView(exited)], queryAt(NOW))).toEqual(["task"])
   })
+
+  test("a restart-preserved clock keeps an actively driven viewer up", () => {
+    // A GPU restart carries lastInputAt across; a stale box clock must not close a desktop the user is driving.
+    const restarted = session({ lastInputAt: NOW - 1, sinks: new Set(["viewer"]) })
+    const streamQuery: IdleTaskQuery = {
+      ...queryAt(NOW),
+      lastActivityAt: NOW - STREAM_MS,
+      streamIdleAfterMs: STREAM_MS,
+    }
+    expect(idleTaskIdsFor([idleSessionView(restarted)], streamQuery)).toEqual([])
+  })
 })
