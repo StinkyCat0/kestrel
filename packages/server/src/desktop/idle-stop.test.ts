@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { stopIdleDesktops, type IdleStopDeps } from "./idle-stop"
+import { idleStopLoopEnabled, stopIdleDesktops, type IdleStopDeps } from "./idle-stop"
 
 const makeDeps = (
   responses: ReadonlyArray<ReadonlyArray<string>>,
@@ -20,6 +20,15 @@ const makeDeps = (
   }
   return { deps, warnings, calls: () => call }
 }
+
+describe("idleStopLoopEnabled", () => {
+  test("the loop runs when either window is enabled", () => {
+    expect(idleStopLoopEnabled(0, 0)).toBe(false)
+    expect(idleStopLoopEnabled(1, 0)).toBe(true)
+    expect(idleStopLoopEnabled(0, 1)).toBe(true)
+    expect(idleStopLoopEnabled(1, 1)).toBe(true)
+  })
+})
 
 describe("stopIdleDesktops", () => {
   test("re-checks before each stop and skips a desktop that gained a viewer", async () => {

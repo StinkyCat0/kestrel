@@ -13,6 +13,10 @@ export interface IdleStopDeps {
   readonly logWarning: (message: string) => Effect.Effect<void>
 }
 
+/** True when either idle window is enabled: the loop must run for the stream close even if the desktop stop is off. */
+export const idleStopLoopEnabled = (desktopIdleAfterMs: number, streamIdleAfterMs: number): boolean =>
+  desktopIdleAfterMs > 0 || streamIdleAfterMs > 0
+
 /**
  * Stops the desktops that were idle when the check began, re-asking `idleTaskIds` with a fresh clock before each stop.
  * A stop waits for process termination, and a viewer or input may arrive for a later desktop in that window; the

@@ -19,7 +19,7 @@ import { CredentialStore, CredentialStoreLive } from "./credentials"
 import { makeModelDiscovery } from "./model-discovery"
 import { GitHubLive } from "./github/api"
 import { DesktopManager, DesktopManagerLive, type DesktopRegion } from "./desktop"
-import { stopIdleDesktops } from "./desktop/idle-stop"
+import { idleStopLoopEnabled, stopIdleDesktops } from "./desktop/idle-stop"
 import { createMcpHandler } from "./mcp"
 import { TaskStatsLive } from "./stats"
 import { makeWebHandler } from "./http/router"
@@ -285,8 +285,9 @@ const program = Effect.gen(function* () {
   // A desktop nobody uses stops itself: that is what lets a Nest host see `desktops: 0` and suspend the VM. Runs and
   // viewers are checked per session; a stop that fails is logged and the loop keeps going.
   const idleStopAfterMs = config.desktopIdleStopAfterMs
+  const streamIdleCloseAfterMs = config.streamIdleCloseAfterMs
   const idleStopFiber =
-    idleStopAfterMs === 0
+    !idleStopLoopEnabled(idleStopAfterMs, streamIdleCloseAfterMs)
       ? null
       : yield* Effect.forkDaemon(
           Effect.gen(function* () {
@@ -304,7 +305,7 @@ const program = Effect.gen(function* () {
                   logWarning: (message) => Effect.logWarning(message),
                 },
                 idleStopAfterMs,
-                config.streamIdleCloseAfterMs,
+                streamIdleCloseAfterMs,
               )
             }
           }),
